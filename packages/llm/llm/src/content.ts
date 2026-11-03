@@ -490,3 +490,16 @@ export function projectToolUpdates(
     tools: [...declarations.values()],
   }
 }
+
+/**
+ * Determines whether an assistant message contains a substantive reply intended for the user.
+ * Messages containing only reasoning blocks, whitespace, or empty content return false,
+ * indicating the model has not yet delivered a final user-facing response.
+ *
+ * @param content - the assistant message content blocks.
+ * @returns true if there is non-empty text content directed to the user.
+ */
+export function hasSubstantiveReply(content: readonly ContentBlock[]): boolean {
+  if (content.length === 0) return false
+  return content.some(block => block.type === 'text' && block.text.trim().length > 0)
+}

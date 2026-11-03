@@ -10,6 +10,14 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 const ICON_PATH = path.join(REPO_ROOT, 'apps/web/dist/icon-512.png');
 const TOKEN_FILE = path.join(process.env.HOME || '/home/kaua', '.dsh/last-token.txt');
 const PORT = 3080;
+const CDP_PORT = 9223;
+
+// Enable Chrome Remote Debugging Protocol (CDP) for automation and inter-agent bridging
+if (!app.commandLine.hasSwitch('remote-debugging-port')) {
+  app.commandLine.appendSwitch('remote-debugging-port', String(CDP_PORT));
+}
+
+let serverProcess = null;
 
 function isPortOpen(port, host = '127.0.0.1') {
   return new Promise((resolve) => {
@@ -28,6 +36,19 @@ function isPortOpen(port, host = '127.0.0.1') {
   });
 }
 
+function killServer() {
+  if (serverProcess && serverProcess.pid) {
+    try {
+      process.kill(-serverProcess.pid, 'SIGTERM');
+    } catch (_) {
+      try {
+        serverProcess.kill('SIGTERM');
+      } catch (_) {}
+    }
+    serverProcess = null;
+  }
+}
+
 async function ensureServerRunning() {
   const open = await isPortOpen(PORT);
   if (open) {
@@ -38,8 +59,8 @@ async function ensureServerRunning() {
     return `http://127.0.0.1:${PORT}/${token ? `?token=${token}` : ''}`;
   }
 
-  // Start server
-  return new Promise((resolve, reject) => {
+  // Start fresh server
+  return new Promise((resolve) => {
     const child = spawn('/usr/bin/pnpm', ['dsh', 'web', '--no-open'], {
       cwd: REPO_ROOT,
       detached: true,
@@ -47,7 +68,7 @@ async function ensureServerRunning() {
       env: { ...process.env },
     });
 
-    child.unref();
+    serverProcess = child;
 
     let resolved = false;
     let accumulated = '';
@@ -71,9 +92,13 @@ async function ensureServerRunning() {
 
     setTimeout(() => {
       if (!resolved) {
-        resolve(`http://127.0.0.1:${PORT}/`);
+        let token = '';
+        if (existsSync(TOKEN_FILE)) {
+          token = readFileSync(TOKEN_FILE, 'utf8').trim();
+        }
+        resolve(`http://127.0.0.1:${PORT}/${token ? `?token=${token}` : ''}`);
       }
-    }, 12000);
+    }, 10000);
   });
 }
 
@@ -88,6 +113,7 @@ app.whenReady().then(async () => {
     title: 'DeepSeek Harness',
     icon: ICON_PATH,
     autoHideMenuBar: true,
+    backgroundColor: '#131418',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -96,7 +122,6 @@ app.whenReady().then(async () => {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    // Open external links in user's default browser
     if (!url.startsWith(`http://127.0.0.1:${PORT}`) && !url.startsWith(`http://localhost:${PORT}`)) {
       shell.openExternal(url);
       return { action: 'deny' };
@@ -104,9 +129,37 @@ app.whenReady().then(async () => {
     return { action: 'allow' };
   });
 
+  // Self-healing: if renderer crashes or hangs, automatically reload
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.warn('Renderer process gone:', details.reason, '- reloading...');
+    setTimeout(() => {
+      mainWindow.loadURL(targetUrl);
+    }, 500);
+  });
+
+  mainWindow.webContents.on('unresponsive', () => {
+    console.warn('Window became unresponsive, reloading...');
+    mainWindow.reload();
+  });
+
+  // Keyboard shortcuts: Ctrl+R / F5 for reload, Ctrl+Shift+I for DevTools
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    if ((input.control && input.key.toLowerCase() === 'r') || input.key === 'F5') {
+      mainWindow.reload();
+    }
+    if (input.control && input.shift && input.key.toLowerCase() === 'i') {
+      mainWindow.webContents.toggleDevTools();
+    }
+  });
+
   mainWindow.loadURL(targetUrl);
 });
 
+app.on('before-quit', () => {
+  killServer();
+});
+
 app.on('window-all-closed', () => {
+  killServer();
   app.quit();
 });

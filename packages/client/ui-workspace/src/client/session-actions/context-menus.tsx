@@ -5,9 +5,10 @@ import type { ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts/client
 import type { MenuContribution, ContextMenuTargetMap } from '@deepseek-ai/dsh-client-ui-context-menu/client'
 import type {
   ArchiveSessionInjected, ForkSessionInjected, PinSessionInjected, RenameSessionInjected, SessionIdInjected,
+  TrashSessionInjected,
 } from '../contract/slots.ts'
 
-type Actions = Omit<PinSessionInjected & ArchiveSessionInjected, 'hooks'>
+type Actions = Omit<PinSessionInjected & ArchiveSessionInjected & TrashSessionInjected, 'hooks'>
   & ForkSessionInjected & RenameSessionInjected & SessionIdInjected
 
 /**
@@ -64,6 +65,24 @@ export function registerSessionMenus(ctx: Context, actions: Actions): void {
       icon: { key: restoring ? 'workspace.unarchive' : 'workspace.archive' }, separatorBefore: true, afterContent: true,
       ...restoring ? {} : { commandId: 'session.archive' as ShortcutCommandId },
       run: () => { (restoring ? actions.unarchiveSession : actions.archiveSession)(target.sessionId) },
+    }]
+  })
+  const trashed = (target: ContextMenuTargetMap['session']): boolean =>
+    ctx.workspaces.list.getSnapshot().trashedSessionIds?.includes(target.sessionId) ?? false
+  register('trash', 650, ['workspace/trashSession', 'workspace/restoreFromTrash', 'workspace/purgeTrashedSession'], (target) => {
+    const isTrashed = trashed(target)
+    if (isTrashed) {
+      if (!allowed(target, 'workspace/restoreFromTrash')) return []
+      return [{
+        id: 'restore', label: t('menu.restoreFromTrash'), icon: { key: 'workspace.unarchive' },
+        run: () => { actions.restoreFromTrash(target.sessionId) },
+      }]
+    }
+    // Only show trash option for archived sessions (safety: can't trash active/archived sessions directly)
+    if (!archived(target) || !allowed(target, 'workspace/trashSession')) return []
+    return [{
+      id: 'trash', label: t('menu.trashSession'), icon: { key: 'workspace.trash' }, separatorBefore: true,
+      run: () => { actions.trashSession(target.sessionId) },
     }]
   })
 }

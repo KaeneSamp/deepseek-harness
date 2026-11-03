@@ -3025,12 +3025,13 @@ function optionalParent(node: ts.Node): ts.Node | undefined {
 }
 
 function isTypeDeclaration(
-  node: ts.Node,
+  node: ts.Node | undefined,
 ): node is ts.ClassDeclaration | ts.InterfaceDeclaration | ts.TypeAliasDeclaration | ts.EnumDeclaration {
-  return ts.isClassDeclaration(node)
-    || ts.isInterfaceDeclaration(node)
-    || ts.isTypeAliasDeclaration(node)
-    || ts.isEnumDeclaration(node)
+  return node !== undefined
+    && (ts.isClassDeclaration(node)
+      || ts.isInterfaceDeclaration(node)
+      || ts.isTypeAliasDeclaration(node)
+      || ts.isEnumDeclaration(node))
 }
 
 function declarationName(
@@ -3180,7 +3181,8 @@ function typertMode(node: ts.Node): 'object' | 'schema' | undefined {
   return undefined
 }
 
-function typertServiceTag(node: ts.Node): ts.JSDocTag | undefined {
+function typertServiceTag(node: ts.Node | undefined): ts.JSDocTag | undefined {
+  if (!node || !ts.isClassDeclaration(node)) return undefined
   return ts.getJSDocTags(node).find(tag => tag.tagName.text === 'typert'
     && (ts.getTextOfJSDocComment(tag.comment) ?? '').trim().split(/\s+/, 1)[0] === 'service')
 }

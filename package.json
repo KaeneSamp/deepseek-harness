@@ -17,6 +17,7 @@
     "website"
   ],
   "scripts": {
+    "dsh:bridge": "node scripts/cdp/cli.mjs",
     "prepare:primary-runtime": "tsx scripts/primary-runtime/prepare.ts",
     "build": "tsx scripts/build.ts",
     "build:artifacts": "tsx scripts/build.ts --scope artifacts",

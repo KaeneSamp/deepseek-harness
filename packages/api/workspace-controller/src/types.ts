@@ -129,6 +129,31 @@ export interface WorkspaceUnarchiveSessionRequest {
   readonly sessionId: SessionId
 }
 
+/** Session requested to be moved from archived to trash. */
+export interface WorkspaceTrashSessionRequest {
+  readonly sessionId: SessionId
+}
+
+/** Complete trashed Session set after a mutation, most recently trashed first. */
+export interface WorkspaceTrashSessionValue {
+  readonly trashedSessionIds: readonly SessionId[]
+}
+
+/** Session requested for restoration from the trash back to archived. */
+export interface WorkspaceRestoreFromTrashRequest {
+  readonly sessionId: SessionId
+}
+
+/** Session requested for permanent deletion from trash. */
+export interface WorkspacePurgeTrashedSessionRequest {
+  readonly sessionId: SessionId
+}
+
+/** Receipt after a session is permanently purged from trash. */
+export interface WorkspacePurgeTrashedSessionValue {
+  readonly purged: boolean
+}
+
 /** Complete archived Session set after a mutation. */
 export interface WorkspaceArchiveValue {
   readonly archivedSessionIds: readonly SessionId[]
@@ -155,6 +180,8 @@ export interface WorkspaceBaseline {
   readonly archivedSessionIds: readonly SessionId[]
   /** Registry-global pin set, most recently pinned first. */
   readonly pinnedSessionIds: readonly SessionId[]
+  /** Registry-global trash set, most recently trashed first. */
+  readonly trashedSessionIds: readonly SessionId[]
 }
 
 /**
@@ -169,6 +196,7 @@ export type WorkspaceFollowIncrement =
   | { readonly type: 'order'; readonly workspaceIds: readonly WorkspaceId[] }
   | { readonly type: 'archived'; readonly archivedSessionIds: readonly SessionId[] }
   | { readonly type: 'pinned'; readonly pinnedSessionIds: readonly SessionId[] }
+  | { readonly type: 'trashed'; readonly trashedSessionIds: readonly SessionId[] }
 
 /** Workspace state stream; every generation starts with exactly one baseline. */
 export type WorkspaceFollowFrame =

@@ -207,4 +207,58 @@ export class TestWorkspaces implements IWorkspaces {
       draft.pinnedSessionIds = draft.pinnedSessionIds.filter(id => id !== sessionId)
     })
   }
+
+  /**
+   * Move an archived session to trash (recorded). The default mirrors the
+   * production face's observable effect: the id enters the list state's trash set.
+   * @param sessionId - session to trash.
+   * @param options - `stopActivity` asks the Host to stop the session's running work.
+   */
+  async trashSession(sessionId: SessionId, options?: { readonly stopActivity?: boolean }): Promise<void> {
+    this.calls.push({ method: 'trashSession', args: [sessionId, options] })
+    const stub = this.stubs.get('trashSession')
+    if (stub !== undefined) {
+      await (stub(sessionId, options) as Promise<void>)
+      return
+    }
+    await this.update((draft) => {
+      if (!draft.trashedSessionIds.includes(sessionId)) {
+        draft.trashedSessionIds = [...draft.trashedSessionIds, sessionId]
+      }
+    })
+  }
+
+  /**
+   * Restore a session from trash back to archived (recorded). The default mirrors
+   * the production face's observable effect: the id leaves the list state's trash set.
+   * @param sessionId - session to restore from trash.
+   */
+  async restoreFromTrash(sessionId: SessionId): Promise<void> {
+    this.calls.push({ method: 'restoreFromTrash', args: [sessionId] })
+    const stub = this.stubs.get('restoreFromTrash')
+    if (stub !== undefined) {
+      await (stub(sessionId) as Promise<void>)
+      return
+    }
+    await this.update((draft) => {
+      draft.trashedSessionIds = draft.trashedSessionIds.filter(id => id !== sessionId)
+    })
+  }
+
+  /**
+   * Permanently delete a trashed session (recorded). The default mirrors the
+   * production face's observable effect: the id leaves the list state's trash set.
+   * @param sessionId - session to purge.
+   */
+  async purgeTrashedSession(sessionId: SessionId): Promise<void> {
+    this.calls.push({ method: 'purgeTrashedSession', args: [sessionId] })
+    const stub = this.stubs.get('purgeTrashedSession')
+    if (stub !== undefined) {
+      await (stub(sessionId) as Promise<void>)
+      return
+    }
+    await this.update((draft) => {
+      draft.trashedSessionIds = draft.trashedSessionIds.filter(id => id !== sessionId)
+    })
+  }
 }

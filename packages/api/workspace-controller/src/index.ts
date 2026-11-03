@@ -24,7 +24,12 @@ import type {
   WorkspaceOrderValue,
   WorkspacePinSessionRequest,
   WorkspacePinValue,
+  WorkspacePurgeTrashedSessionRequest,
+  WorkspacePurgeTrashedSessionValue,
   WorkspaceRenameRequest,
+  WorkspaceRestoreFromTrashRequest,
+  WorkspaceTrashSessionRequest,
+  WorkspaceTrashSessionValue,
   WorkspaceUnarchiveSessionRequest,
   WorkspaceUnpinSessionRequest,
   WorkspaceValue,
@@ -48,12 +53,18 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Host Workspace business API and Remote namespace owner. */
     workspaceController: WorkspaceController
+    /** Schedule service for auto-purge job. */
+    schedule: {
+      registerTrashPurgeCallback: (
+        callback: (cutoffDate: Date) => Promise<{ purgedCount: number; purgedSessionIds: readonly string[] }>,
+      ) => void
+    }
   }
 }
 
 /** Host service backing the generated `ctx.remote.workspace` namespace. */
 export class WorkspaceController extends TypertRemoteService {
-  static inject = ['remoteAccess', 'typert', 'workspaceRegistry']
+  static inject = ['remoteAccess', 'typert', 'workspaceRegistry', 'sessionPersistence', 'schedule']
 
   static Config: z<Config, ResolvedConfig> = z.object({
     documentsDirectory: z.string(),
@@ -73,8 +84,12 @@ export class WorkspaceController extends TypertRemoteService {
     ctx.typert.resources.register('workspace', { field: 'workspaceId' })
     this.config = WorkspaceController.Config(config)
     if (this.config.documentsDirectory !== undefined) validateDocumentsDirectory(this.config.documentsDirectory)
-    this.commands = new WorkspaceCommands(ctx)
+    this.commands = new WorkspaceCommands(ctx, ctx.sessionPersistence)
     this.feed = new WorkspaceFeed(ctx)
+    // Register auto-purge callback with ScheduleService
+    ctx.schedule.registerTrashPurgeCallback(async (cutoffDate: Date) => {
+      return await this.commands.purgeExpiredTrash(cutoffDate)
+    })
     // This package is the Loader entry for both Remote owners it hosts: the
     // directory-picking seam is abstract and never an entry itself. The child
     // stays pending until a picking backend is composed, so a host without one
@@ -192,6 +207,37 @@ export class WorkspaceController extends TypertRemoteService {
   }
 
   /**
+   * Move one archived Session to the registry-global trash set.
+   * @param request - Session identity to trash.
+   * @returns the complete resulting trash set, most recently trashed first.
+   */
+  @Remote('trashSession')
+  trashSession(request: WorkspaceTrashSessionRequest): Promise<WorkspaceTrashSessionValue> {
+    return this.commands.trashSession(request)
+  }
+
+  /**
+   * Restore one Session from the registry-global trash set back to the
+   * archived set.
+   * @param request - Session identity to restore from trash.
+   * @returns the complete resulting trash set, most recently trashed first.
+   */
+  @Remote('restoreFromTrash')
+  restoreFromTrash(request: WorkspaceRestoreFromTrashRequest): Promise<WorkspaceTrashSessionValue> {
+    return this.commands.restoreFromTrash(request)
+  }
+
+  /**
+   * Permanently delete one Session from the registry-global trash set.
+   * @param request - Session identity to purge.
+   * @returns confirmation that the session was purged.
+   */
+  @Remote('purgeTrashedSession')
+  purgeTrashedSession(request: WorkspacePurgeTrashedSessionRequest): Promise<WorkspacePurgeTrashedSessionValue> {
+    return this.commands.purgeTrashedSession(request)
+  }
+
+  /**
    * Stream a complete Workspace baseline followed by ordered increments. A
    * non-owner receives only the Workspaces and Sessions `allows()` admits.
    * When a delivered Workspace is no longer admitted at its next change or
@@ -219,6 +265,7 @@ export class WorkspaceController extends TypertRemoteService {
         items: items.map(item => ({ ...item, sessionIds: sessions(item.sessionIds) })),
         archivedSessionIds: sessions(value.archivedSessionIds),
         pinnedSessionIds: sessions(value.pinnedSessionIds),
+        trashedSessionIds: sessions(value.trashedSessionIds),
       }
     }
     for await (const frame of this.feed.follow(signal)) {
@@ -251,6 +298,9 @@ export class WorkspaceController extends TypertRemoteService {
           break
         case 'pinned':
           yield { type: 'pinned', pinnedSessionIds: sessions(frame.pinnedSessionIds) }
+          break
+        case 'trashed':
+          yield { type: 'trashed', trashedSessionIds: sessions(frame.trashedSessionIds) }
           break
         /* v8 ignore next -- closed follow-frame union. */
         default:

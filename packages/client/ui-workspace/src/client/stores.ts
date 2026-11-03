@@ -28,6 +28,8 @@ type WorkspaceViewState = {
   sessionOrderByAccount: Record<string, string[]>
   /** Archived-row visibility; omitted in pre-filter v5 snapshots and read as 'default'. */
   archivedFilter?: ArchivedFilter
+  /** Trashed-row visibility; 'default' = hide, 'show' = show, 'only' = show only trashed. */
+  trashedFilter?: ArchivedFilter
 }
 
 type SessionOrderSource = {
@@ -66,6 +68,7 @@ type WorkspaceViewActions = {
     source: SessionOrderSource,
   ) => void
   setArchivedFilter: (draft: WorkspaceViewState, filter: ArchivedFilter) => void
+  setTrashedFilter: (draft: WorkspaceViewState, filter: ArchivedFilter) => void
 }
 
 /** Copy read-only projections into the persisted mutable store representation. */
@@ -125,6 +128,7 @@ export function createWorkspaceViewStore(): EngineStoreHandle<WorkspaceViewState
         }))
       },
       setArchivedFilter: (d, filter: ArchivedFilter) => { d.archivedFilter = filter },
+      setTrashedFilter: (d, filter: ArchivedFilter) => { d.trashedFilter = filter },
     },
   })
 }

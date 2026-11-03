@@ -14,7 +14,8 @@ import type {
   ImageRequestTarget,
   RequestImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
-import type { Context as PiContext, ImageContent, Message as PiMessage, SystemMessage, TextContent, Tool as PiTool } from '@earendil-works/pi-ai'
+import type { Api as PiApi, AssistantMessage, Context as PiContext, ImageContent, Message as PiMessage, Model as PiModel, SystemMessage, TextContent, Tool as PiTool } from '@earendil-works/pi-ai'
+
 import { toPiAssistant } from './replay.ts'
 import { requestImageDimensions } from '@deepseek-ai/dsh-attachment'
 import { DEFAULT_REQUEST_IMAGE_MAX_BYTES, DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET } from './config.ts'
@@ -390,4 +391,65 @@ async function toPiContextWithImages(
   }
 
   return piContext(split.systemPrompt, options, messages)
+}
+
+/**
+ * Preserves reasoning in assistant history across multi-step autonomous turns.
+ * For APIs without native signed reasoning support in chat history (such as standard
+ * OpenAI Completions/Responses endpoints), reasoning blocks are re-injected as canonical
+ * <think>...</think> delimiters to prevent cognitive amnesia and eliminate empty-content errors.
+ *
+ * @param context - the converted pi-ai Context envelope.
+ * @param model - the resolved model route.
+ * @returns the context with reasoning preserved symmetrically for downstream API consumption.
+ */
+export function preserveCognitiveHistory(context: PiContext, model: PiModel<PiApi>): PiContext {
+  const isNativeSignedReasoning = model.api === 'anthropic-messages'
+
+  const messages = context.messages.map((message) => {
+    if (message.role !== 'assistant') return message
+    if (!Array.isArray(message.content)) return message
+
+    const thinkingBlocks = message.content.filter(b => b.type === 'thinking')
+
+    if (thinkingBlocks.length === 0) return message
+
+    if (isNativeSignedReasoning && thinkingBlocks.every(b => b.thinkingSignature || b.redacted)) {
+      return message
+    }
+
+    const thoughts = thinkingBlocks
+      .map(b => b.thinking.trim())
+      .filter(t => t.length > 0)
+      .join('\n\n')
+
+    const thinkText = thoughts.length > 0 ? `<think>\n${thoughts}\n</think>` : ''
+
+    const nonThinkingBlocks = message.content.filter(b => b.type !== 'thinking')
+    const textBlocks = nonThinkingBlocks.filter(b => b.type === 'text')
+    const otherBlocks = nonThinkingBlocks.filter(b => b.type !== 'text')
+
+    let newContent: AssistantMessage['content']
+    if (thinkText.length > 0) {
+      if (textBlocks.length > 0) {
+        const combinedText = `${thinkText}\n\n${textBlocks.map(b => b.text).join('\n\n')}`
+        newContent = [{ type: 'text', text: combinedText }, ...otherBlocks]
+      } else {
+        newContent = [{ type: 'text', text: thinkText }, ...otherBlocks]
+      }
+    } else {
+      newContent = nonThinkingBlocks
+    }
+
+    return {
+      ...message,
+      content: newContent,
+    }
+  })
+
+
+  return {
+    ...context,
+    messages,
+  }
 }

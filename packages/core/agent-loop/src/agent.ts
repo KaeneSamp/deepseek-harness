@@ -25,8 +25,10 @@ import {
   createAssistantMessage,
   createDeveloperMessage,
   errorChain,
+  hasSubstantiveReply,
   markAgentLoopRequest,
 } from '@deepseek-ai/dsh-llm'
+import { SemanticStagnationDetector } from './stagnation.ts'
 import { assertNever, deepFreeze } from '@deepseek-ai/dsh-util-values'
 import type { Scope } from '@deepseek-ai/dsh-scope'
 import { createScope } from '@deepseek-ai/dsh-scope'
@@ -133,6 +135,7 @@ export class ReactLoopAgent implements Agent {
   private readonly systemPrompt: SystemPromptProjection
   /** Identities fully frozen by this loop; weak references do not retain replaced history. */
   private readonly frozenMessages = new WeakSet<Message>()
+  private readonly stagnationDetector = new SemanticStagnationDetector()
 
   constructor(
     private loopCtx: Context,
@@ -338,6 +341,7 @@ export class ReactLoopAgent implements Agent {
       this.throwError(error)
     }
     phase.turn = turn
+    this.stagnationDetector.reset()
     let turnEnds: TurnEndReason | null = null
     let target: InboxTarget = 'next-turn'
     try {
@@ -584,24 +588,43 @@ export class ReactLoopAgent implements Agent {
         if (finish.kind === 'max-tokens') return { kind: 'max-tokens' }
 
         const toolCalls = message.content.filter(block => block.type === 'tool-call')
-        if (toolCalls.length === 0) return { kind: 'completed' }
-        const maxParallelToolCalls = this.loopCtx.agentLoop.config.maxParallelToolCalls.get()
-        try {
-          const result = await this.loopCtx.tools.execute({
-            calls: toolCalls, signal, agent: this, log: { turn, step },
-            maxParallelToolCalls, toolSet: decision.toolSet,
-          })
-          for (const context of result.additionalContexts) {
-            this.inbox.splice('next-step', this.inbox.nextStep.length, 0, [context])
+        if (toolCalls.length > 0) {
+          this.stagnationDetector.reset()
+          const maxParallelToolCalls = this.loopCtx.agentLoop.config.maxParallelToolCalls.get()
+          try {
+            const result = await this.loopCtx.tools.execute({
+              calls: toolCalls, signal, agent: this, log: { turn, step },
+              maxParallelToolCalls, toolSet: decision.toolSet,
+            })
+            for (const context of result.additionalContexts) {
+              this.inbox.splice('next-step', this.inbox.nextStep.length, 0, [context])
+            }
+            return result.concluded ? { kind: 'completed' } : null
+          } catch (error: unknown) {
+            if (!(error instanceof ToolBatchExecutionError)) throw error
+            for (const context of error.partial.additionalContexts) {
+              this.inbox.splice('next-step', this.inbox.nextStep.length, 0, [context])
+            }
+            throw error.cause
           }
-          return result.concluded ? { kind: 'completed' } : null
-        } catch (error: unknown) {
-          if (!(error instanceof ToolBatchExecutionError)) throw error
-          for (const context of error.partial.additionalContexts) {
-            this.inbox.splice('next-step', this.inbox.nextStep.length, 0, [context])
-          }
-          throw error.cause
         }
+
+        if (hasSubstantiveReply(message.content)) {
+          this.stagnationDetector.reset()
+          return { kind: 'completed' }
+        }
+
+        const reasoningText = message.content
+          .filter(block => block.type === 'reasoning')
+          .map(block => block.text)
+          .join('\n')
+
+        const isHealthy = this.stagnationDetector.recordAndCheckProgress(reasoningText)
+        if (!isHealthy) {
+          return { kind: 'completed' }
+        }
+
+        return null
       } catch (error: unknown) {
         if (!live.ended) live.abandon()
         throw error

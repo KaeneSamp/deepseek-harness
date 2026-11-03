@@ -9,9 +9,12 @@ import type {
 import { createDeveloperMessage, ToolCallId, createAssistantMessage, createMessage, createToolResultMessage, createUserMessage, offloadedImageText } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message, RequestUserInput } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
-import { toPiContext } from '../src/context.ts'
+import { preserveCognitiveHistory, toPiContext } from '../src/context.ts'
 import type { PiImageRequestContext } from '../src/context.ts'
+import type { Api as PiApi, Context as PiContext, Model as PiModel } from '@earendil-works/pi-ai'
+
 import { toPiAssistant } from '../src/replay.ts'
+
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -687,4 +690,135 @@ describe('pi-ai system prompt source', () => {
     await expect(toPiContext(options, imageContext(projectionStore(read)))).rejects.toThrow(error)
     expect(read).not.toHaveBeenCalled()
   })
+})
+
+describe('preserveCognitiveHistory', () => {
+  const openAiModel = {
+    id: 'nvidia_nim/nemotron-3-ultra',
+    provider: 'nvidia_nim',
+    api: 'openai-responses' as const,
+    baseUrl: 'http://127.0.0.1:8082',
+  }
+
+  const anthropicModel = {
+    id: 'claude-3-7-sonnet',
+    provider: 'anthropic',
+    api: 'anthropic-messages' as const,
+    baseUrl: 'https://api.anthropic.com',
+  }
+
+  it('re-injects reasoning as <think> tags for OpenAI-compatible models when assistant message has reasoning only', () => {
+    const context = {
+      messages: [
+        {
+          role: 'assistant' as const,
+          content: [
+            { type: 'thinking' as const, thinking: 'I need to inspect the code before editing.' },
+          ],
+          timestamp: 0,
+        },
+      ],
+    }
+
+    const preserved = preserveCognitiveHistory(context as unknown as PiContext, openAiModel as unknown as PiModel<PiApi>)
+    expect(preserved.messages[0]).toEqual({
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: '<think>\nI need to inspect the code before editing.\n</think>',
+        },
+      ],
+      timestamp: 0,
+    })
+  })
+
+  it('combines reasoning and text into a single content block for OpenAI-compatible models', () => {
+    const context = {
+      messages: [
+        {
+          role: 'assistant' as const,
+          content: [
+            { type: 'thinking' as const, thinking: 'Step 1 calculation' },
+            { type: 'text' as const, text: 'Here is the answer.' },
+          ],
+          timestamp: 0,
+        },
+      ],
+    }
+
+    const preserved = preserveCognitiveHistory(context as unknown as PiContext, openAiModel as unknown as PiModel<PiApi>)
+    expect(preserved.messages[0]).toEqual({
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: '<think>\nStep 1 calculation\n</think>\n\nHere is the answer.',
+        },
+      ],
+      timestamp: 0,
+    })
+  })
+
+  it('preserves tool calls alongside re-injected reasoning for OpenAI-compatible models', () => {
+    const context = {
+      messages: [
+        {
+          role: 'assistant' as const,
+          content: [
+            { type: 'thinking' as const, thinking: 'I should run ls.' },
+            { type: 'toolCall' as const, id: 'call_1', name: 'bash', arguments: { cmd: 'ls' } },
+          ],
+          timestamp: 0,
+        },
+      ],
+    }
+
+    const preserved = preserveCognitiveHistory(context as unknown as PiContext, openAiModel as unknown as PiModel<PiApi>)
+    expect(preserved.messages[0]).toEqual({
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: '<think>\nI should run ls.\n</think>',
+        },
+        {
+          type: 'toolCall',
+          id: 'call_1',
+          name: 'bash',
+          arguments: { cmd: 'ls' },
+        },
+      ],
+      timestamp: 0,
+    })
+  })
+
+  it('preserves native signed thinking blocks untouched for Anthropic models', () => {
+    const context = {
+      messages: [
+        {
+          role: 'assistant' as const,
+          content: [
+            { type: 'thinking' as const, thinking: 'Signed thought', thinkingSignature: 'sig_123' },
+            { type: 'text' as const, text: 'Signed answer' },
+          ],
+          timestamp: 0,
+        },
+      ],
+    }
+
+    const preserved = preserveCognitiveHistory(context as unknown as PiContext, anthropicModel as unknown as PiModel<PiApi>)
+    expect(preserved.messages[0]).toEqual({
+
+
+
+      role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'Signed thought', thinkingSignature: 'sig_123' },
+        { type: 'text', text: 'Signed answer' },
+      ],
+      timestamp: 0,
+    })
+  })
+
 })

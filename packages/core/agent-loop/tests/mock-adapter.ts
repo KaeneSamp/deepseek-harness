@@ -27,6 +27,18 @@ export function maxTokensResponse(text: string): StreamChunk[] {
   ]
 }
 
+export function thinkingResponse(text: string): StreamChunk[] {
+  return [
+    { type: 'block-start', index: 0, blockType: 'reasoning' },
+    ...Array.from(text, (char): StreamChunk => ({ type: 'reasoning-delta', index: 0, text: char })),
+    { type: 'block-end', index: 0, block: { type: 'reasoning', text } },
+    { type: 'usage', usage: { inputTokens: 10, outputTokens: text.length } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ]
+}
+
+
+
 export function toolCallResponse(rawCallId: string, name: string, args: object, text?: string): StreamChunk[] {
   const callId = ToolCallId(rawCallId)
   const argumentsJson = JSON.stringify(args)

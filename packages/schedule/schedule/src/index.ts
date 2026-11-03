@@ -89,6 +89,12 @@ export interface Config {
    */
   deliveryHistoryRecords?: number
   /**
+   * Retention period for trashed sessions in days; omission defaults to 30.
+   * The auto-purge job runs daily and permanently deletes sessions trashed before this period.
+   * Set to 0 to disable auto-purge.
+   */
+  trashRetentionDays?: number
+  /**
    * Shortest spacing, in seconds, from the occurrence of one delivery to the next delivery of one task whose target
    * creates a Session at every delivery; omission defaults to 60. Timed and manual deliveries both wait for it.
    */
@@ -103,6 +109,9 @@ const DEFAULT_DELIVERY_HISTORY_RECORDS = 200
 
 /** Spacing between Session-creating deliveries of one task applied when the deployment states none. */
 const DEFAULT_NEW_SESSION_INTERVAL_SECONDS = 60
+
+/** Retention period for trashed sessions applied when the deployment states none (days). */
+const DEFAULT_TRASH_RETENTION_DAYS = 30
 
 /** Page size of a task list request that states none. */
 export const DEFAULT_LIST_LIMIT = 100
@@ -228,6 +237,7 @@ export class ScheduleService extends TypertRemoteService {
     deliveryHistoryRecords: z.number().step(1).min(1).max(10_000).default(DEFAULT_DELIVERY_HISTORY_RECORDS),
     newSessionIntervalSeconds: z.number().step(1).min(MIN_EVERY_INTERVAL_SECONDS).max(604_800)
       .default(DEFAULT_NEW_SESSION_INTERVAL_SECONDS),
+    trashRetentionDays: z.number().step(1).min(0).max(3650).default(DEFAULT_TRASH_RETENTION_DAYS),
   })
 
   /** Resolved retention and admission limits shared with the runtime that appends acknowledgments. */
@@ -239,6 +249,8 @@ export class ScheduleService extends TypertRemoteService {
   private runtime: ScheduleRuntime | undefined
   private resolveWebAgent: ((sessionId: SessionId) => Promise<Agent>) | undefined
   private stopping = false
+  /** Callback for the auto-purge job, registered by the WorkspaceController. */
+  private trashPurgeCallback: ((cutoffDate: Date) => Promise<{ purgedCount: number; purgedSessionIds: readonly string[] }>) | undefined
 
   /**
    * @param ctx - Host services owning storage, dispatch, and Session restoration.
@@ -264,6 +276,7 @@ export class ScheduleService extends TypertRemoteService {
         records: config.deliveryHistoryRecords ?? DEFAULT_DELIVERY_HISTORY_RECORDS,
       },
       newSessionIntervalMs: (config.newSessionIntervalSeconds ?? DEFAULT_NEW_SESSION_INTERVAL_SECONDS) * 1_000,
+      trashRetentionDays: config.trashRetentionDays ?? DEFAULT_TRASH_RETENTION_DAYS,
     }
     this.ready = ctx.storageDomain.open(scheduleDomain).then(async (domain) => {
       try {
@@ -343,7 +356,61 @@ export class ScheduleService extends TypertRemoteService {
 
   async [Service.init](): Promise<void> {
     await this.initialized
+    // Start the auto-purge timer after initialization if callback is registered
+    this.maybeStartTrashPurgeTimer()
   }
+
+  /**
+   * Register the callback for the auto-purge job.
+   * Called by the WorkspaceController during initialization.
+   * @param callback - Function that purges expired trash sessions given a cutoff date.
+   *   Should return the count and ids of purged sessions.
+   */
+  registerTrashPurgeCallback(
+    callback: (cutoffDate: Date) => Promise<{ purgedCount: number; purgedSessionIds: readonly string[] }>,
+  ): void {
+    this.trashPurgeCallback = callback
+    // If the timer was already started, restart it with the new callback
+    this.maybeStartTrashPurgeTimer()
+  }
+
+  /**
+   * Start the daily auto-purge timer if enabled and callback is registered.
+   */
+  private maybeStartTrashPurgeTimer(): void {
+    if (this.trashPurgeTimer !== undefined) return
+    if (this.limits.trashRetentionDays === 0) return
+    if (this.trashPurgeCallback === undefined) return
+
+    // Run at 03:00 local time daily
+    const scheduleNext = () => {
+      const now = new Date()
+      const nextRun = new Date(now)
+      nextRun.setHours(3, 0, 0, 0)
+      if (nextRun <= now) {
+        nextRun.setDate(nextRun.getDate() + 1)
+      }
+      const msUntilNext = nextRun.getTime() - now.getTime()
+      this.trashPurgeTimer = setTimeout(async () => {
+        this.trashPurgeTimer = undefined
+        try {
+          const cutoffDate = new Date(Date.now() - this.limits.trashRetentionDays * 24 * 60 * 60 * 1000)
+          if (this.trashPurgeCallback !== undefined) {
+            const result = await this.trashPurgeCallback(cutoffDate)
+            if (result.purgedCount > 0) {
+              this.ctx.logger.info(`schedule: auto-purge deleted ${result.purgedCount} trashed session(s)`)
+            }
+          }
+        } catch (error) {
+          this.ctx.logger.error(`schedule: auto-purge failed: ${String(error)}`)
+        }
+        scheduleNext()
+      }, msUntilNext)
+    }
+    scheduleNext()
+  }
+
+  private trashPurgeTimer: ReturnType<typeof setTimeout> | undefined
 
   /** Read effective delivery limits without loading or activating a task.
    * @returns The configured minimum spacing between deliveries that each create a Session, in seconds.

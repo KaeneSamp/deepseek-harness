@@ -40,7 +40,7 @@ export function WorkspaceId(id: string): WorkspaceId {
 }
 
 /**
- * An archiveSession or pinSession request named a session neither live nor in
+ * An archiveSession, pinSession, or trashSession request named a session neither live nor in
  * session persistence — a definite miss only; storage faults propagate as
  * themselves.
  */
@@ -49,7 +49,7 @@ export class WorkspaceUnknownSessionError extends Error {
    * @param sessionId - The unknown session id.
    * @param verb - The registry operation that named the session.
    */
-  constructor(readonly sessionId: SessionId, verb: 'archive' | 'pin') {
+  constructor(readonly sessionId: SessionId, verb: 'archive' | 'pin' | 'trash') {
     super(`cannot ${verb} session '${sessionId}': live sessions and session persistence hold no such session`)
     this.name = 'WorkspaceUnknownSessionError'
   }
@@ -79,6 +79,17 @@ export class WorkspaceArchivedSessionPinError extends Error {
   constructor(readonly sessionId: SessionId) {
     super(`cannot pin session '${sessionId}': the session is archived`)
     this.name = 'WorkspaceArchivedSessionPinError'
+  }
+}
+
+/** A trashSession request named a session that is not currently archived; only archived sessions can be trashed. */
+export class WorkspaceNotArchivedError extends Error {
+  /**
+   * @param sessionId - The session id that is not archived.
+   */
+  constructor(readonly sessionId: SessionId) {
+    super(`cannot trash session '${sessionId}': the session is not archived`)
+    this.name = 'WorkspaceNotArchivedError'
   }
 }
 
@@ -466,6 +477,74 @@ export class WorkspaceRegistry extends Service {
   }
 
   /**
+   * The registry-global trash set: sessions moved from archive for
+   * eventual permanent deletion after a retention period.
+   * @returns Session ids in trash order (most recently trashed first).
+   */
+  get trashedSessionIds(): readonly SessionId[] {
+    return this.requireState().trashedSessionIds
+  }
+
+  /**
+   * When each session was moved to trash (ISO-8601 timestamps).
+   * @returns map from session id to trashed timestamp.
+   */
+  get trashedAt(): ReadonlyMap<SessionId, string> {
+    const entries = Object.entries(this.requireState().trashedAt) as [SessionId, string][]
+    return new Map(entries)
+  }
+
+  /**
+   * Move one archived session to the registry-global trash set.
+   * The session must be currently archived. An id that is already trashed
+   * resolves without writing.
+   * @param sessionId - The session to trash.
+   * @returns resolution after durability.
+   */
+  trashSession(sessionId: SessionId): Promise<void> {
+    return this.enqueueOperation(async () => {
+      const state = this.requireState()
+      if (state.trashedSessionIds.includes(sessionId)) return
+      if (!state.archivedSessionIds.includes(sessionId)) {
+        throw new WorkspaceNotArchivedError(sessionId)
+      }
+      if (!(await this.sessionKnown(sessionId))) {
+        throw new WorkspaceUnknownSessionError(sessionId, 'trash')
+      }
+      const now = new Date().toISOString()
+      const newTrashedAt = new Map(Object.entries(state.trashedAt)) as Map<SessionId, string>
+      newTrashedAt.set(sessionId, now)
+      await this.setState({
+        ...state,
+        archivedSessionIds: state.archivedSessionIds.filter(id => id !== sessionId),
+        trashedSessionIds: [sessionId, ...state.trashedSessionIds],
+        trashedAt: Object.fromEntries(newTrashedAt),
+      })
+    })
+  }
+
+  /**
+   * Restore one session from trash back to the archived set.
+   * An id that is not trashed resolves without writing.
+   * @param sessionId - The session to restore from trash.
+   * @returns resolution after durability.
+   */
+  restoreFromTrash(sessionId: SessionId): Promise<void> {
+    return this.enqueueOperation(async () => {
+      const state = this.requireState()
+      if (!state.trashedSessionIds.includes(sessionId)) return
+      const newTrashedAt = new Map(Object.entries(state.trashedAt)) as Map<SessionId, string>
+      newTrashedAt.delete(sessionId)
+      await this.setState({
+        ...state,
+        archivedSessionIds: [sessionId, ...state.archivedSessionIds],
+        trashedSessionIds: state.trashedSessionIds.filter(id => id !== sessionId),
+        trashedAt: Object.fromEntries(newTrashedAt),
+      })
+    })
+  }
+
+  /**
    * Whether a session is live, header-indexed, or present in a fresh
    * persistence listing. Only a definite miss returns false — a failing
    * `sessionPersistence.list()` propagates so storage faults never
@@ -731,6 +810,8 @@ export class WorkspaceRegistry extends Service {
         workspaceIds,
         archivedSessionIds: state.archivedSessionIds,
         pinnedSessionIds: state.pinnedSessionIds,
+        trashedSessionIds: state.trashedSessionIds,
+        trashedAt: state.trashedAt,
       })
     }
     await this.setState({
@@ -738,6 +819,8 @@ export class WorkspaceRegistry extends Service {
       workspaceIds,
       archivedSessionIds: state.archivedSessionIds,
       pinnedSessionIds: state.pinnedSessionIds,
+      trashedSessionIds: state.trashedSessionIds,
+      trashedAt: state.trashedAt,
     })
   }
 

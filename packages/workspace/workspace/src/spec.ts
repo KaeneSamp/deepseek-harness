@@ -51,7 +51,10 @@ const workspacePendingMutation = z.discriminatedUnion('operation', [
  * position), so the set never participates in the one-owner accounting
  * invariant. `pinnedSessionIds` is the registry-global pin set in pin order
  * (most recently pinned first); pinning and archival are mutually
- * exclusive, so archiving drops the session's pin. Both session sets are
+ * exclusive, so archiving drops the session's pin. `trashedSessionIds` is
+ * the registry-global trash set in trash order (most recently trashed first);
+ * only archived sessions can be trashed. `trashedAt` maps each trashed session
+ * to its ISO-8601 trash timestamp for 30-day auto-purge. All session sets are
  * defaulted so records written before the fields parse unchanged.
  */
 export const workspaceDomainState = z.object({
@@ -61,6 +64,8 @@ export const workspaceDomainState = z.object({
   workspaceIds: z.array(workspaceId),
   archivedSessionIds: z.array(sessionId).default([]),
   pinnedSessionIds: z.array(sessionId).default([]),
+  trashedSessionIds: z.array(sessionId).default([]),
+  trashedAt: z.record(sessionId, z.string()).default({}),
   pendingMutation: workspacePendingMutation.optional(),
 })
 
@@ -75,10 +80,11 @@ export type WorkspaceDomainState = z.infer<typeof workspaceDomainState>
  */
 export const workspaceDomainSpec = defineDomain({
   name: 'workspace',
-  version: 2,
+  version: 3,
+  compatibleVersions: [2],
   global: {
     schema: workspaceDomainState,
-    initial: { initialized: false, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [] },
+    initial: { initialized: false, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [], trashedSessionIds: [], trashedAt: {} },
   },
   tables: { workspaces: domainTable<WorkspaceId, WorkspaceRecord>(workspaceRecord) },
 })

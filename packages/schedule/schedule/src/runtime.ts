@@ -36,6 +36,8 @@ export interface ScheduleRuntimeLimits {
   readonly retention: DeliveryRetentionBounds
   /** Delivery floor interval of one task whose every delivery creates a Session. */
   readonly newSessionIntervalMs: number
+  /** Retention period for trashed sessions in days (0 = disabled). */
+  readonly trashRetentionDays: number
 }
 
 /** Target Session of one delivery and its live Agent. */

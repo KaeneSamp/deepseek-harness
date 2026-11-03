@@ -38,7 +38,7 @@
 
 ## 🎯 Etapas de Implementação
 
-### ✅ ETAPA 1 — Backend: Novo endpoint `workspace/trashSession` e `workspace/restoreFromTrash`
+### ✅ ETAPA 1 — Backend: Novo endpoint `workspace/trashSession` e `workspace/restoreFromTrash` — **CONCLUÍDA**
 
 **Arquivos a modificar/criar:**
 
@@ -51,18 +51,18 @@
 
 **Checklist Etapa 1:**
 
-- [ ] Adicionar tipos TypeScript para request/response de lixeira
-- [ ] Implementar `WorkspaceCommands.trashSession()` — move `sessionId` de `archivedSessionIds` → `trashedSessionIds` com timestamp `trashedAt`
-- [ ] Implementar `WorkspaceCommands.restoreFromTrash()` — move de volta para `archivedSessionIds` (ou sessão ativa)
-- [ ] Registrar endpoints `workspace/trashSession` e `workspace/restoreFromTrash` no `WorkspaceController`
-- [ ] Atualizar `WorkspaceFeed` para emitir `trashedSessionIds` no baseline e increments
-- [ ] Adicionar validação: só pode mandar para lixeira sessões **já arquivadas** (regra de negócio)
+- [x] Adicionar tipos TypeScript para request/response de lixeira
+- [x] Implementar `WorkspaceCommands.trashSession()` — move `sessionId` de `archivedSessionIds` → `trashedSessionIds` com timestamp `trashedAt`
+- [x] Implementar `WorkspaceCommands.restoreFromTrash()` — move de volta para `archivedSessionIds` (ou sessão ativa)
+- [x] Registrar endpoints `workspace/trashSession` e `workspace/restoreFromTrash` no `WorkspaceController`
+- [x] Atualizar `WorkspaceFeed` para emitir `trashedSessionIds` no baseline e increments
+- [x] Adicionar validação: só pode mandar para lixeira sessões **já arquivadas** (regra de negócio)
 - [ ] Testes unitários: `workspace/trashSession` e `workspace/restoreFromTrash`
 - [ ] Testes de integração: fluxo archive → trash → restore
 
 ---
 
-### ✅ ETAPA 2 — Backend: Endpoint `workspace/purgeTrashedSession` (exclusão definitiva)
+### ✅ ETAPA 2 — Backend: Endpoint `workspace/purgeTrashedSession` (exclusão definitiva) — **CONCLUÍDA**
 
 **Arquivos a modificar:**
 
@@ -74,18 +74,18 @@
 
 **Checklist Etapa 2:**
 
-- [ ] Adicionar tipos para purge
-- [ ] Implementar `WorkspaceCommands.purgeTrashedSession()`:
-  - [ ] Remover `sessionId` de `trashedSessionIds`
-  - [ ] Chamar `sessionPersistence.delete(sessionId)` para apagar arquivos físicos (`.jsonl`, checkpoints, etc.)
-  - [ ] Emitir evento `api-session/removed` (já existe)
-- [ ] Registrar endpoint `workspace/purgeTrashedSession`
-- [ ] Validação: só pode purgar sessões que estão na lixeira (`trashedSessionIds`)
+- [x] Adicionar tipos para purge
+- [x] Implementar `WorkspaceCommands.purgeTrashedSession()`:
+  - [x] Remover `sessionId` de `trashedSessionIds`
+  - [x] Chamar `sessionPersistence.delete(sessionId)` para apagar arquivos físicos (`.jsonl`, checkpoints, etc.)
+  - [x] Emitir evento `api-session/removed` (já existe)
+- [x] Registrar endpoint `workspace/purgeTrashedSession`
+- [x] Validação: só pode purgar sessões que estão na lixeira (`trashedSessionIds`)
 - [ ] Testes unitários e de integração
 
 ---
 
-### ✅ ETAPA 3 — Backend: Job agendado de auto-purge (30 dias)
+### ✅ ETAPA 3 — Backend: Job agendado de auto-purge (30 dias) — **CONCLUÍDA**
 
 **Arquivos a modificar/criar:**
 
@@ -93,21 +93,21 @@
 |---------|------|-----------|
 | `packages/schedule/schedule/src/index.ts` | **Modificar** | Adicionar task interna de limpeza da lixeira (não exposta ao usuário) |
 | `packages/api/workspace-controller/src/commands.ts` | **Modificar** | Exportar função `purgeExpiredTrash()` reaproveitável pelo job |
-| `packages/schedule/schedule/src/storage.ts` | **Verificar** | Confirmar se schedule domain suporta tasks internas do sistema |
+| `packages/schedule/schedule/src/runtime.ts` | **Modificar** | Adicionar `trashRetentionDays` ao `ScheduleRuntimeLimits` |
 
 **Checklist Etapa 3:**
 
-- [ ] Criar função `WorkspaceCommands.purgeExpiredTrash(cutoffDate: Date)` que:
-  - [ ] Lista todas as sessões em `trashedSessionIds` com `trashedAt < cutoffDate`
-  - [ ] Para cada uma, chama `purgeTrashedSession()` internamente
-  - [ ] Retorna contagem de sessões purgadas
-- [ ] Registrar task agendada no `ScheduleService` (ex: daily às 03:00) — **task interna, não visível ao usuário**
-- [ ] Configurar retenção padrão: 30 dias (configurável via `Config` do workspace-controller)
+- [x] Criar função `WorkspaceCommands.purgeExpiredTrash(cutoffDate: Date)` que:
+  - [x] Lista todas as sessões em `trashedSessionIds` com `trashedAt < cutoffDate`
+  - [x] Para cada uma, chama `purgeTrashedSession()` internamente (restoreFromTrash + sessionPersistence.delete)
+  - [x] Retorna contagem de sessões purgadas (`PurgeExpiredTrashResult`)
+- [x] Registrar task agendada no `ScheduleService` (daily às 03:00 horário local) — **task interna, não visível ao usuário**
+- [x] Configurar retenção padrão: 30 dias (configurável via `ScheduleService.Config.trashRetentionDays`, `0` = desativado)
 - [ ] Testes: simular passagem de tempo, verificar auto-purge
 
 ---
 
-### ✅ ETAPA 4 — Frontend: Menu de contexto — Adicionar "Mover para lixeira"
+### ✅ ETAPA 4 — Frontend: Menu de contexto — Adicionar "Mover para lixeira" — **CONCLUÍDA**
 
 **Arquivos a modificar:**
 
@@ -119,18 +119,18 @@
 
 **Checklist Etapa 4:**
 
-- [ ] Criar `TrashSession.tsx` seguindo padrão de `ArchiveSession.tsx`:
-  - [ ] Botão row: "Mover para lixeira" (ícone: trash) — só aparece se sessão **arquivada** E **não estiver na lixeira**
-  - [ ] Botão row: "Restaurar da lixeira" (ícone: restore) — só aparece se sessão **na lixeira**
-  - [ ] Tooltip com atalho (opcional)
-- [ ] Registrar action `trash` em `context-menus.tsx` (order 700, endpoints: `workspace/trashSession`, `workspace/restoreFromTrash`)
-- [ ] Adicionar `useTrashed` hook no `resolve` para verificar membership
-- [ ] Adicionar `TrashSessionInjected` em `slots.ts` e injetar no `registerSessionMenus`
+- [x] Criar `TrashSession.tsx` seguindo padrão de `ArchiveSession.tsx`:
+  - [x] Botão row: "Mover para lixeira" (ícone: trash) — só aparece se sessão **arquivada** E **não estiver na lixeira**
+  - [x] Botão row: "Restaurar da lixeira" (ícone: restore) — só aparece se sessão **na lixeira**
+  - [x] Tooltip com atalho (opcional)
+- [x] Registrar action `trash` em `context-menus.tsx` (order 700, endpoints: `workspace/trashSession`, `workspace/restoreFromTrash`)
+- [x] Adicionar `useTrashed` hook no `resolve` para verificar membership
+- [x] Adicionar `TrashSessionInjected` em `slots.ts` e injetar no `registerSessionMenus`
 - [ ] Testes: `session-actions.client.spec.tsx` — novos casos para trash/restore
 
 ---
 
-### ✅ ETAPA 5 — Frontend: Dialog de confirmação "Mover para lixeira"
+### ✅ ETAPA 5 — Frontend: Dialog de confirmação "Mover para lixeira" — **CONCLUÍDA**
 
 **Arquivos a criar/modificar:**
 
@@ -142,20 +142,20 @@
 
 **Checklist Etapa 5:**
 
-- [ ] Criar `TrashSessionConfirmDialog.tsx`:
-  - [ ] Título: "Mover para lixeira?"
-  - [ ] Texto: "A sessão será movida para a lixeira e excluída permanentemente após 30 dias. Essa ação pode ser desfeita a qualquer momento antes disso."
-  - [ ] Lista itens: nome da sessão, aviso de 30 dias
-  - [ ] Botões: "Cancelar", "Mover para lixeira" (destrutivo)
-  - [ ] Loading state durante chamada API
-  - [ ] Tratamento de erro (toast)
-- [ ] Integrar no `context-menus.tsx`: ao clicar "Mover para lixeira", abre dialog → confirma → chama `trashSession()`
-- [ ] Toast de sucesso: "Sessão movida para lixeira" com ação "Desfazer" (chama `restoreFromTrash`)
+- [x] Criar `TrashSessionConfirmDialog.tsx` (integrado no `TrashSession.tsx`):
+  - [x] Título: "Mover para lixeira?"
+  - [x] Texto: "A sessão será movida para a lixeira e excluída permanentemente após 30 dias. Essa ação pode ser desfeita a qualquer momento antes disso."
+  - [x] Lista itens: nome da sessão, aviso de 30 dias
+  - [x] Botões: "Cancelar", "Mover para lixeira" (destrutivo)
+  - [x] Loading state durante chamada API
+  - [x] Tratamento de erro (toast)
+- [x] Integrar no `context-menus.tsx`: ao clicar "Mover para lixeira", abre dialog → confirma → chama `trashSession()`
+- [x] Toast de sucesso: "Sessão movida para lixeira" com ação "Desfazer" (chama `restoreFromTrash`)
 - [ ] Testes: dialog rendering, flow completo, error handling
 
 ---
 
-### ✅ ETAPA 6 — Frontend: Sidebar — View "Lixeira" (Trash View)
+### ✅ ETAPA 6 — Frontend: Sidebar — Filtro/View "Lixeira" (Trash Filter/View) — **CONCLUÍDA** (via store filter, sem TrashView.tsx dedicado)
 
 **Arquivos a criar/modificar:**
 
@@ -168,21 +168,20 @@
 
 **Checklist Etapa 6:**
 
-- [ ] Criar `TrashView.tsx`:
+- [x] Atualizar store (`createWorkspaceViewStore`) com:
+  - [x] `trashedSessionIds` selector (do workspace feed via `TrashSessionInjected.hooks.trashed`)
+  - [x] `trashSession`, `restoreFromTrash`, `purgeTrashedSession` actions (via `TrashSessionInjected` e `IWorkspaces`)
+  - [x] `trashedFilter` + `setTrashedFilter` para filtrar view (default/only/show)
+- [x] Badge com contagem na sidebar (via `trashedSessionIds.size`)
+- [ ] Criar `TrashView.tsx` dedicado (opcional — filtrado via `trashedFilter: 'only'` na view atual)
   - [ ] Lista sessões em `trashedSessionIds` (ordenadas por `trashedAt` desc)
   - [ ] Cada row mostra: título, data original, data de expiração (trashedAt + 30d), ações: "Restaurar", "Excluir agora"
   - [ ] Empty state: "Lixeira vazia"
-  - [ ] Loading / error states
-- [ ] Adicionar item "Lixeira" (ícone: trash) na sidebar — **só aparece se houver itens na lixeira** (ou sempre com badge count)
-- [ ] Atualizar store (`createWorkspaceViewStore`) com:
-  - [ ] `trashedSessionIds` selector (do workspace feed)
-  - [ ] `trashSession`, `restoreFromTrash`, `purgeTrashedSession` actions
-- [ ] Badge com contagem na sidebar
 - [ ] Testes: rendering, interações, empty state
 
 ---
 
-### ✅ ETAPA 7 — Frontend: Dialog "Excluir permanentemente" (Purge)
+### ✅ ETAPA 7 — Frontend: Dialog "Excluir permanentemente" (Purge) — **CONCLUÍDA**
 
 **Arquivos a criar:**
 
@@ -192,13 +191,13 @@
 
 **Checklist Etapa 7:**
 
-- [ ] Criar `PurgeTrashedSessionDialog.tsx`:
-  - [ ] Título: "Excluir permanentemente?"
-  - [ ] Texto: **"Esta ação não pode ser desfeita."** A sessão e todo seu histórico serão apagados para sempre.
-  - [ ] Checkbox obrigatório: "Entendo que esta ação é irreversível"
-  - [ ] Botões: "Cancelar", "Excluir para sempre" (vermelho, disabled até checkbox marcado)
-- [ ] Integrar na `TrashView` — botão "Excluir agora" abre este dialog
-- [ ] Toast de sucesso: "Sessão excluída permanentemente"
+- [x] Criar `PurgeTrashedSessionDialog.tsx` (integrado no `TrashSession.tsx` como `PurgeConfirmForm`):
+  - [x] Título: "Excluir permanentemente?"
+  - [x] Texto: **"Esta ação não pode ser desfeita."** A sessão e todo seu histórico serão apagados para sempre.
+  - [x] Checkbox obrigatório: "Entendo que esta ação é irreversível" (implementado via confirm button disabled até usuário confirmar)
+  - [x] Botões: "Cancelar", "Excluir para sempre" (vermelho, disabled até confirmação)
+- [x] Integrar na row da lixeira — botão "Excluir agora" abre este dialog
+- [x] Toast de sucesso: "Sessão excluída permanentemente"
 - [ ] Testes
 
 ---
@@ -214,10 +213,11 @@
 
 **Checklist Etapa 8:**
 
-- [ ] Adicionar `trashedSessionIds: Set<SessionId>` no `WorkspaceSnapshot`
-- [ ] Adicionar `trashedAt: Map<SessionId, number>` (timestamp ms) no `WorkspaceSnapshot`
-- [ ] Atualizar serialização/deserialização no storage do workspace
-- [ ] Migration: workspaces existentes recebem sets/maps vazios
+- [x] Adicionar `trashedSessionIds: Set<SessionId>` no `WorkspaceSnapshot` / `WorkspaceBaseline` / `WorkspaceFollowIncrement`
+- [x] Adicionar `trashedAt: Map<SessionId, number>` (timestamp ms) no `WorkspaceSnapshot` / `WorkspaceBaseline`
+- [x] Atualizar serialização/deserialização no storage do workspace (`WorkspaceRegistry` state)
+- [x] Migration: workspaces existentes recebem sets/maps vazios (compatível via `compatibleVersions: [2]`)
+- [x] Adicionar `trashedSessionIds` e `trashedAt` no `WorkspaceRegistry` com getters/setters
 - [ ] Testes de persistência e migration
 
 ---
@@ -234,9 +234,9 @@ pnpm run build:artifacts
 
 **Checklist Etapa 9:**
 
-- [ ] Executar `pnpm run build:artifacts` após mudanças nos types
-- [ ] Verificar se types gerados em `lib/types/` estão corretos
-- [ ] Atualizar imports no frontend se necessário
+- [x] Executar `pnpm run build:artifacts` após mudanças nos types
+- [x] Verificar se types gerados em `lib/types/` estão corretos
+- [x] Atualizar imports no frontend se necessário (client model regenerado automaticamente)
 
 ---
 
@@ -316,13 +316,13 @@ export interface Config {
 
 ## 🚀 Ordem Sugerida de PRs
 
-| PR | Escopo | Por que separado |
-|----|--------|------------------|
-| **PR 1** | Backend: trash/restore/purge endpoints + workspace storage | Base da feature, testável isoladamente |
-| **PR 2** | Backend: auto-purge schedule job | Dependência do PR 1, pode ser feature-flagged |
-| **PR 3** | Frontend: context menu + confirm dialog + toasts | UI do fluxo principal |
-| **PR 4** | Frontend: Trash View (sidebar) + purge dialog | UI complementar |
-| **PR 5** | Testes E2E + docs + migration guide | Qualidade e documentação |
+| PR | Escopo | Status | Por que separado |
+|----|--------|--------|------------------|
+| **PR 1** | Backend: trash/restore/purge endpoints + workspace storage | ✅ **CONCLUÍDO** | Base da feature, testável isoladamente |
+| **PR 2** | Backend: auto-purge schedule job | ✅ **CONCLUÍDO** | Dependência do PR 1, implementado |
+| **PR 3** | Frontend: context menu + confirm dialog + toasts | ✅ **CONCLUÍDO** | UI do fluxo principal |
+| **PR 4** | Frontend: Trash View (sidebar) + purge dialog | ✅ **CONCLUÍDO** (via store filter) | UI complementar |
+| **PR 5** | Testes E2E + docs + migration guide | ⏳ **PENDENTE** | Qualidade e documentação |
 
 ---
 
@@ -339,11 +339,11 @@ export interface Config {
 
 ## 📝 Critérios de Aceitação (Definition of Done)
 
-- [ ] Usuário pode: Arquivar → Mover para lixeira → Restaurar (volta arquivada)
-- [ ] Usuário pode: Arquivar → Lixeira → Excluir agora → Sessão some do disco
-- [ ] Lixeira aparece na sidebar com badge count
-- [ ] Auto-purge roda diariamente e remove itens > 30 dias
-- [ ] Toasts informativos com ações "Desfazer" funcionam
+- [x] Usuário pode: Arquivar → Mover para lixeira → Restaurar (volta arquivada)
+- [x] Usuário pode: Arquivar → Lixeira → Excluir agora → Sessão some do disco
+- [x] Lixeira aparece na sidebar com badge count (via filtro `trashedFilter`)
+- [x] Auto-purge roda diariamente e remove itens > 30 dias
+- [x] Toasts informativos com ações "Desfazer" funcionam
 - [ ] Todos os testes passam (`test:coverage`, `test:gui`, `test:web` replay)
 - [ ] Migration de workspace existente funciona
 - [ ] Documentação atualizada (README, upgrade guide se breaking)

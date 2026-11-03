@@ -11,7 +11,8 @@ import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
-import { MockAdapter, textResponse } from './mock-adapter.ts'
+import { MockAdapter, textResponse, thinkingResponse } from './mock-adapter.ts'
+
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -177,5 +178,50 @@ describe('Agent', () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('agent event "agent/status" listener threw'),
     )
+  })
+
+  it('autonomous reasoning: advances across multiple pure thinking steps until substantive reply in a single turn', async () => {
+    const adapter = new MockAdapter([
+      thinkingResponse('I need to plan the implementation strategy and analyze edge cases.'),
+      thinkingResponse('Now that the edge cases are analyzed, I am ready to formulate the final response.'),
+      textResponse('Here is the finalized complete solution.'),
+    ])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'Solve this complex problem')
+    await agent.whenIdle()
+
+    expect(agent.status).toBe('idle')
+    // All 3 steps executed in a single turn
+    expect(adapter.requests).toHaveLength(3)
+
+    const events = agent.session.snapshotEvents()
+    // Verify only ONE user message exists in the session (no fake injected user continuations!)
+    const userMessages = events.filter(e => e.type === 'user/message')
+    expect(userMessages).toHaveLength(1)
+
+    // Verify turn lifecycle started once and completed once
+    const turnStarts = events.filter(e => e.type === 'turn/start')
+    const turnEnds = events.filter(e => e.type === 'turn/end')
+    expect(turnStarts).toHaveLength(1)
+    expect(turnEnds).toHaveLength(1)
+  })
+
+  it('autonomous reasoning: stops gracefully if repetitive thinking stagnates', async () => {
+    const adapter = new MockAdapter([
+      thinkingResponse('I am thinking about the problem in circle.'),
+      thinkingResponse('I am thinking about the problem in circle.'), // Exact stagnation
+      textResponse('Unreachable if stopped early'),
+    ])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'Think')
+    await agent.whenIdle()
+
+    expect(agent.status).toBe('idle')
+    // Stagnation detector halts after step 2, does NOT call step 3
+    expect(adapter.requests).toHaveLength(2)
   })
 })

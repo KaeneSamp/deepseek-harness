@@ -9,7 +9,7 @@
  */
 
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, isContextWindowExceededError, isQuotaExceededError, LlmError, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
+import { CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, isContextWindowExceededError, isQuotaExceededError, LlmError, QUOTA_EXCEEDED_CODE, extractThinkingFromChunks } from '@deepseek-ai/dsh-llm'
 import type { FinishReason, StreamChunk, TokenUsage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow'
 import type { AssistantMessage, AssistantMessageEvent, Usage as PiUsage } from '@earendil-works/pi-ai'
@@ -141,7 +141,7 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
  *   `MALFORMED_RESPONSE` when completed tool arguments are invalid. Length-limited
  *   output retains its terminal reason so the assembler can discard incomplete calls.
  */
-export async function* toStreamChunks(
+async function* rawToStreamChunks(
   events: AsyncIterable<AssistantMessageEvent>,
   contextWindow?: number,
   callerSignal?: AbortSignal,
@@ -241,4 +241,13 @@ export async function* toStreamChunks(
     }
   }
   throw new LlmError('pi-ai event stream ended without done/error', 'STREAM_CLOSED')
+}
+
+export async function* toStreamChunks(
+  events: AsyncIterable<AssistantMessageEvent>,
+  contextWindow?: number,
+  callerSignal?: AbortSignal,
+  requestedModel?: string,
+): AsyncGenerator<StreamChunk> {
+  yield* extractThinkingFromChunks(rawToStreamChunks(events, contextWindow, callerSignal, requestedModel))
 }

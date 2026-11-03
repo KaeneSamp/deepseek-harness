@@ -764,6 +764,44 @@ describe('toStreamChunks', () => {
     ])
   })
 
+  it('separates in-band <think> tags from text events into reasoning and text blocks', async () => {
+    const done = assistant({
+      content: [{ type: 'text', text: '<think>planning step</think>final answer' }],
+      usage: usage(3, 2),
+    })
+    const chunks = await collect(toStreamChunks(feed(
+      { type: 'start', partial: assistant() },
+      { type: 'text_start', contentIndex: 0, partial: assistant() },
+      { type: 'text_delta', contentIndex: 0, delta: '<think>planning step</think>final answer', partial: assistant() },
+      { type: 'text_end', contentIndex: 0, content: '<think>planning step</think>final answer', partial: assistant() },
+      { type: 'done', reason: 'stop', message: done },
+    )))
+    expect(chunks).toEqual([
+      { type: 'block-start', index: 0, blockType: 'reasoning' },
+      { type: 'reasoning-delta', index: 0, text: 'planning step' },
+      { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'planning step' } },
+      { type: 'block-start', index: 1, blockType: 'text' },
+      { type: 'text-delta', index: 1, text: 'final answer' },
+      { type: 'block-end', index: 1, block: { type: 'text', text: 'final answer' } },
+      { type: 'usage', usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 } },
+      {
+        type: 'finish',
+        reason: { kind: 'stop' },
+        replayState: {
+          response: {
+            kind: 'pi-ai',
+            version: 2,
+            api: 'openai-completions',
+            provider: 'deepseek',
+            model: 'deepseek-v4-flash',
+            stopReason: 'stop',
+          },
+          blocks: [{ type: 'reasoning' }, { type: 'text' }],
+        },
+      },
+    ])
+  })
+
   it('maps thinking events to reasoning blocks', async () => {
     const chunks = await collect(toStreamChunks(feed(
       { type: 'thinking_start', contentIndex: 0, partial: assistant() },

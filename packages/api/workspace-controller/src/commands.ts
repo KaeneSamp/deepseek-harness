@@ -2,11 +2,14 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
+import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import {
   WorkspaceActiveSessionError,
   WorkspaceArchivedSessionPinError,
   WorkspaceId,
   WorkspaceMoveInvalidError,
+  WorkspaceNotArchivedError,
   WorkspaceOrderInvalidError,
   WorkspaceUnknownSessionError,
 } from '@deepseek-ai/dsh-workspace'
@@ -24,18 +27,31 @@ import type {
   WorkspaceOrderValue,
   WorkspacePinSessionRequest,
   WorkspacePinValue,
+  WorkspacePurgeTrashedSessionRequest,
+  WorkspacePurgeTrashedSessionValue,
   WorkspaceRenameRequest,
+  WorkspaceRestoreFromTrashRequest,
+  WorkspaceTrashSessionRequest,
+  WorkspaceTrashSessionValue,
   WorkspaceUnarchiveSessionRequest,
   WorkspaceUnpinSessionRequest,
   WorkspaceValue,
 } from './types.ts'
+
+/** Result of the automatic trash purge job. */
+export interface PurgeExpiredTrashResult {
+  /** Number of sessions permanently deleted. */
+  readonly purgedCount: number
+  /** Session ids that were purged. */
+  readonly purgedSessionIds: readonly SessionId[]
+}
 
 /** Implements Workspace mutations against the authoritative registry. */
 export class WorkspaceCommands {
   private operationTail = Promise.resolve()
 
   /** @param ctx - Host context containing the Workspace registry. */
-  constructor(private readonly ctx: Context) {}
+  constructor(private readonly ctx: Context, private readonly sessionPersistence: SessionPersistence) {}
 
   /**
    * Create or resolve one Workspace over an existing directory.
@@ -192,6 +208,104 @@ export class WorkspaceCommands {
   async unarchiveSession(request: WorkspaceUnarchiveSessionRequest): Promise<WorkspaceArchiveValue> {
     await this.ctx.workspaceRegistry.unarchiveSession(request.sessionId)
     return { archivedSessionIds: [...this.ctx.workspaceRegistry.archivedSessionIds] }
+  }
+
+  /**
+   * Move one archived Session to the registry-global trash set.
+   * The session must be currently archived. An id that is already trashed
+   * resolves without writing.
+   * @param request - Session identity to trash.
+   * @returns the complete resulting trash set, most recently trashed first.
+   */
+  async trashSession(request: WorkspaceTrashSessionRequest): Promise<WorkspaceTrashSessionValue> {
+    try {
+      await this.ctx.workspaceRegistry.trashSession(request.sessionId)
+    } catch (error) {
+      if (error instanceof WorkspaceUnknownSessionError) {
+        throw new RemoteError('session/not-found', error.message, { sessionId: request.sessionId }, { cause: error })
+      }
+      if (error instanceof WorkspaceNotArchivedError) {
+        throw new RemoteError('gateway/bad-request', error.message, {}, { cause: error })
+      }
+      throw error
+    }
+    return { trashedSessionIds: [...this.ctx.workspaceRegistry.trashedSessionIds] }
+  }
+
+  /**
+   * Restore one Session from the registry-global trash set back to the
+   * archived set. An id that is not trashed resolves without writing.
+   * @param request - Session identity to restore from trash.
+   * @returns the complete resulting trash set, most recently trashed first.
+   */
+  async restoreFromTrash(request: WorkspaceRestoreFromTrashRequest): Promise<WorkspaceTrashSessionValue> {
+    await this.ctx.workspaceRegistry.restoreFromTrash(request.sessionId)
+    return { trashedSessionIds: [...this.ctx.workspaceRegistry.trashedSessionIds] }
+  }
+
+  /**
+   * Permanently delete one Session from the registry-global trash set.
+   * This removes the session from trash and deletes its persisted data.
+   * An id that is not trashed resolves without writing.
+   * @param request - Session identity to purge.
+   * @returns confirmation that the session was purged.
+   */
+  async purgeTrashedSession(request: WorkspacePurgeTrashedSessionRequest): Promise<WorkspacePurgeTrashedSessionValue> {
+    const sessionId = request.sessionId
+    const state = this.ctx.workspaceRegistry
+    if (!state.trashedSessionIds.includes(sessionId)) {
+      return { purged: false }
+    }
+    // First remove from trash
+    await this.ctx.workspaceRegistry.restoreFromTrash(sessionId)
+    // Then delete the session's persisted data
+    try {
+      await this.sessionPersistence.delete(sessionId)
+    } catch (_error) {
+      // If session doesn't exist in persistence, that's fine - it's already gone
+      // We still return purged: true since the workspace registry is clean
+    }
+    return { purged: true }
+  }
+
+  /**
+   * Permanently delete all trashed sessions older than the given cutoff date.
+   * This is called by the scheduled auto-purge job.
+   * @param cutoffDate - Sessions trashed before this date will be purged.
+   * @returns the number of purged sessions and their ids.
+   */
+  async purgeExpiredTrash(cutoffDate: Date): Promise<PurgeExpiredTrashResult> {
+    return this.enqueue(async () => {
+      const state = this.ctx.workspaceRegistry
+      const trashedAt = state.trashedAt
+      const cutoffISO = cutoffDate.toISOString()
+
+      // Find all trashed sessions older than cutoff
+      const expiredSessionIds: SessionId[] = []
+      for (const [sessionId, trashedAtISO] of trashedAt) {
+        if (trashedAtISO < cutoffISO) {
+          expiredSessionIds.push(sessionId)
+        }
+      }
+
+      if (expiredSessionIds.length === 0) {
+        return { purgedCount: 0, purgedSessionIds: [] }
+      }
+
+      // Purge each expired session
+      for (const sessionId of expiredSessionIds) {
+        // Remove from trash
+        await this.ctx.workspaceRegistry.restoreFromTrash(sessionId)
+        // Delete persisted data
+        try {
+          await this.sessionPersistence.delete(sessionId)
+        } catch (_error) {
+          // If session doesn't exist in persistence, that's fine - it's already gone
+        }
+      }
+
+      return { purgedCount: expiredSessionIds.length, purgedSessionIds: expiredSessionIds }
+    })
   }
 
   /**

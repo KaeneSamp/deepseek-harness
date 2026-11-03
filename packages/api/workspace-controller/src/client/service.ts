@@ -101,6 +101,23 @@ export interface IWorkspaces {
    */
   unpinSession(sessionId: SessionId): Promise<void>
   /**
+   * Move an archived Session to the registry-global trash set.
+   * @param sessionId - Session to trash.
+   * @param options - `stopActivity` asks the Host to stop the Session's running work instead of refusing.
+   * @throws when the Host refuses; a Session that is not archived fails as `gateway/bad-request`.
+   */
+  trashSession(sessionId: SessionId, options?: { readonly stopActivity?: boolean }): Promise<void>
+  /**
+   * Restore a Session from the registry-global trash set back to archived.
+   * @param sessionId - Session to restore from trash.
+   */
+  restoreFromTrash(sessionId: SessionId): Promise<void>
+  /**
+   * Permanently delete a trashed Session and its on-disk files.
+   * @param sessionId - Session to purge.
+   */
+  purgeTrashedSession(sessionId: SessionId): Promise<void>
+  /**
    * Move a Session within one Workspace account.
    * @param workspaceId - owning Workspace.
    * @param sessionId - Session to move.
@@ -173,6 +190,21 @@ export class WorkspaceController extends Service implements IWorkspaces {
   async unpinSession(sessionId: SessionId): Promise<void> {
     const result = await this.model.unpinSession(sessionId)
     if (!result.ok) throw commandError('session unpin', result.error)
+  }
+
+  async trashSession(sessionId: SessionId, options: { readonly stopActivity?: boolean } = {}): Promise<void> {
+    const result = await this.model.trashSession(sessionId, options)
+    if (!result.ok) throw commandError('session trash', result.error)
+  }
+
+  async restoreFromTrash(sessionId: SessionId): Promise<void> {
+    const result = await this.model.restoreFromTrash(sessionId)
+    if (!result.ok) throw commandError('session restore from trash', result.error)
+  }
+
+  async purgeTrashedSession(sessionId: SessionId): Promise<void> {
+    const result = await this.model.purgeTrashedSession(sessionId)
+    if (!result.ok) throw commandError('session purge', result.error)
   }
 
   async insertSessionBefore(

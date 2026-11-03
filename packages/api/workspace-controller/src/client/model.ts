@@ -4,6 +4,7 @@ import { notifySubscribers } from '@deepseek-ai/dsh-client-store'
 import type {} from '@deepseek-ai/dsh-api-workspace-controller/remote'
 import { isRemoteFailure } from '@deepseek-ai/dsh-api-gateway/client'
 import type { RemoteFailure, RemoteResult, TypertClientRemote } from '@deepseek-ai/dsh-typert-protocol'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {
   WorkspaceArchiveSessionRequest,
   WorkspaceArchiveValue,
@@ -15,6 +16,8 @@ import type {
   WorkspaceOrderValue,
   WorkspacePinSessionRequest,
   WorkspacePinValue,
+  WorkspacePurgeTrashedSessionValue,
+  WorkspaceTrashSessionValue,
   WorkspaceUnarchiveSessionRequest,
   WorkspaceUnpinSessionRequest,
   WorkspaceValue,
@@ -35,6 +38,8 @@ export interface WorkspaceSnapshot {
   readonly archivedSessionIds: WorkspaceArchiveValue['archivedSessionIds']
   /** Complete registry-global pin set, most recently pinned first. */
   readonly pinnedSessionIds: WorkspacePinValue['pinnedSessionIds']
+  /** Complete registry-global trash set, most recently trashed first. */
+  readonly trashedSessionIds: WorkspaceTrashSessionValue['trashedSessionIds']
   readonly state: 'idle' | 'loading' | 'error'
   readonly phase: WorkspaceListPhase
   readonly error: RemoteFailure | null
@@ -54,6 +59,8 @@ export interface WorkspaceFollowSink {
   replaceArchived(sessionIds: WorkspaceArchiveValue['archivedSessionIds']): void
   /** Replace the complete pinned Session set. */
   replacePinned(pinnedSessionIds: WorkspacePinValue['pinnedSessionIds']): void
+  /** Replace the complete trashed Session set. */
+  replaceTrashed(trashedSessionIds: WorkspaceTrashSessionValue['trashedSessionIds']): void
 }
 
 /**
@@ -63,6 +70,7 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
   private items: readonly WorkspaceView[] = []
   private archivedSessionIds: WorkspaceArchiveValue['archivedSessionIds'] = []
   private pinnedSessionIds: WorkspacePinValue['pinnedSessionIds'] = []
+  private trashedSessionIds: WorkspaceTrashSessionValue['trashedSessionIds'] = []
   private state: WorkspaceSnapshot['state'] = 'loading'
   private phase: WorkspaceListPhase = 'pending'
   private error: RemoteFailure | null = null
@@ -76,6 +84,8 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
   private archiveRequestSeq = 0
   /** Latest pin-set request; a later request or a pushed set supersedes it. */
   private pinRequestSeq = 0
+  /** Latest trash-set request; a later request or a pushed set supersedes it. */
+  private trashRequestSeq = 0
   /** Host Workspace ids are never reused, so delayed data cannot resurrect a removed row. */
   private readonly removedIds = new Set<WorkspaceId>()
   private readonly listeners = new Set<() => void>()
@@ -258,6 +268,68 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
   }
 
   /**
+   * Move a Session to trash and install the returned complete trash set.
+   * A reply superseded by a later trash request or a pushed set installs nothing.
+   * @param sessionId - Session to trash.
+   * @param options - Whether the Host stops the Session's running work instead of refusing.
+   * @returns generated Remote result.
+   */
+  async trashSession(
+    sessionId: SessionId,
+    options: { stopActivity?: boolean } = {},
+  ): Promise<RemoteResult<WorkspaceTrashSessionValue>> {
+    const requestSeq = ++this.trashRequestSeq
+    const result = await this.remote.trashSession({
+      sessionId,
+      ...(options.stopActivity === true ? { stopActivity: true } : {}),
+    })
+    if (result.ok && requestSeq === this.trashRequestSeq) {
+      this.installTrashed(result.value.trashedSessionIds)
+      // The Host drops a trashed session's archive in the same durable write;
+      // mirror that locally so no frame shows the row both trashed and archived.
+      this.installArchived(this.archivedSessionIds.filter(id => id !== sessionId))
+      this.installPinned(this.pinnedSessionIds.filter(id => id !== sessionId))
+    }
+    return result
+  }
+
+  /**
+   * Restore a Session from trash and install the returned complete trash set.
+   * A reply superseded by a later trash request or a pushed set installs nothing.
+   * @param sessionId - Session to restore from trash.
+   * @returns generated Remote result.
+   */
+  async restoreFromTrash(
+    sessionId: SessionId,
+  ): Promise<RemoteResult<WorkspaceTrashSessionValue>> {
+    const requestSeq = ++this.trashRequestSeq
+    const result = await this.remote.restoreFromTrash({ sessionId })
+    if (result.ok && requestSeq === this.trashRequestSeq) {
+      this.installTrashed(result.value.trashedSessionIds)
+    }
+    return result
+  }
+
+  /**
+   * Permanently delete a trashed Session and install the returned complete trash set.
+   * A reply superseded by a later trash request or a pushed set installs nothing.
+   * @param sessionId - Session to purge.
+   * @returns generated Remote result.
+   */
+  async purgeTrashedSession(
+    sessionId: SessionId,
+  ): Promise<RemoteResult<WorkspacePurgeTrashedSessionValue>> {
+    const requestSeq = ++this.trashRequestSeq
+    const result = await this.remote.purgeTrashedSession({ sessionId })
+    if (result.ok && requestSeq === this.trashRequestSeq) {
+      // Purge returns WorkspacePurgeTrashedSessionValue which has `purged: boolean`
+      // but we still need to refresh the trash set from the stream
+      // The stream will deliver a 'trashed' frame with the updated set
+    }
+    return result
+  }
+
+  /**
    * Replace the projection from one complete stream-generation baseline.
    * @param baseline - complete Workspace and archive projection.
    */
@@ -308,6 +380,15 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
     this.installPinned(pinnedSessionIds)
   }
 
+  /**
+   * Replace the trashed Session set from the current follow generation.
+   * @param trashedSessionIds - complete Host-confirmed trash set, most recently trashed first.
+   */
+  replaceTrashed(trashedSessionIds: WorkspaceTrashSessionValue['trashedSessionIds']): void {
+    this.trashRequestSeq++
+    this.installTrashed(trashedSessionIds)
+  }
+
   /** Keep the last complete projection visible while a lost carrier reconnects. */
   handleCarrierFailure(): void {
     this.state = 'loading'
@@ -350,6 +431,7 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
       items: this.items,
       archivedSessionIds: this.archivedSessionIds,
       pinnedSessionIds: this.pinnedSessionIds,
+      trashedSessionIds: this.trashedSessionIds,
       state: this.state,
       phase: this.phase,
       error: this.error,
@@ -367,6 +449,13 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
     if (pinnedSessionIds.length === this.pinnedSessionIds.length
       && pinnedSessionIds.every((id, index) => id === this.pinnedSessionIds[index])) return
     this.pinnedSessionIds = [...pinnedSessionIds]
+    this.invalidate()
+  }
+
+  private installTrashed(trashedSessionIds: WorkspaceTrashSessionValue['trashedSessionIds']): void {
+    if (trashedSessionIds.length === this.trashedSessionIds.length
+      && trashedSessionIds.every((id, index) => id === this.trashedSessionIds[index])) return
+    this.trashedSessionIds = [...trashedSessionIds]
     this.invalidate()
   }
 

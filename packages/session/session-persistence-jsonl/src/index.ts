@@ -28,6 +28,7 @@ import {
   type SessionAccess, type SessionHandle,
   type SessionHandleReadResult,
   type SessionLocation, type SessionPersistenceCreateOptions,
+  type SessionPersistenceDeleteOptions,
   type SessionPersistenceListOptions, type SessionPersistenceOpenOptions,
   type SessionPersistenceSnapshot, type SessionPersistenceStatOptions,
   type SessionPersistenceRevision as PersistenceRevision,
@@ -561,6 +562,30 @@ class JsonlSessionPersistence extends SessionPersistence {
     }
     signal?.throwIfAborted()
     return snapshots
+  }
+
+  /**
+   * Permanently delete a stored session and all its artifacts.
+   * This removes the session directory and all generation files.
+   * @param id - the stored session to delete.
+   * @param options - optional cancellation.
+   * @throws {SessionPersistenceNotFoundError} when the session does not exist.
+   */
+  async delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<void> {
+    const signal = options?.signal
+    const selected = await this.findLog(id, signal)
+    if (selected === undefined) throw new SessionPersistenceNotFoundError(id)
+    signal?.throwIfAborted()
+    const sessionDirPath = dirname(selected.sourcePath)
+    await rm(sessionDirPath, { recursive: true, force: true })
+    // Also remove any migration preparation for this session
+    const preparation = this.migrationPreparations.get(id)
+    if (preparation !== undefined) {
+      preparation.controller.abort()
+      this.migrationPreparations.delete(id)
+    }
+    // Remove from cold log memo
+    this.coldLogMemo.delete(id)
   }
 
   // --- handle-facing storage internals (package-private via the handle class below) ---

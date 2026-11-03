@@ -8,6 +8,7 @@ import {
   createToolResultMessage,
   createUserMessage,
   fileHandleText,
+  hasSubstantiveReply,
   projectFilesToText,
   offloadedImageText,
   projectImagesForTextModel,
@@ -540,5 +541,38 @@ describe('projectToolUpdates', () => {
     expect(roles(inHistory.messages)).toHaveLength(3)
     const additionOnly = projectToolUpdates(messages, [search, fetch], 'addition-only', history)
     expect(roles(additionOnly.messages)).toEqual([[{ type: 'tool-addition', toolName: 'fetch' }]])
+  })
+})
+
+describe('hasSubstantiveReply', () => {
+  it('returns false for empty content', () => {
+    expect(hasSubstantiveReply([])).toBe(false)
+  })
+
+  it('returns false for pure reasoning content', () => {
+    expect(hasSubstantiveReply([
+      { type: 'reasoning', text: 'I am thinking about the next step...' },
+    ])).toBe(false)
+  })
+
+  it('returns false for whitespace-only text content', () => {
+    expect(hasSubstantiveReply([
+      { type: 'reasoning', text: 'Some thoughts' },
+      { type: 'text', text: '   \n\n  ' },
+    ])).toBe(false)
+  })
+
+  it('returns true when non-empty text content is present', () => {
+    expect(hasSubstantiveReply([
+      { type: 'reasoning', text: 'Some thoughts' },
+      { type: 'text', text: 'Here is the answer to your question.' },
+    ])).toBe(true)
+  })
+
+  it('returns false when only tool calls are present', () => {
+    expect(hasSubstantiveReply([
+      { type: 'reasoning', text: 'I will list the files' },
+      { type: 'tool-call', id: ToolCallId('call-1'), name: 'ls', arguments: '{}' },
+    ])).toBe(false)
   })
 })

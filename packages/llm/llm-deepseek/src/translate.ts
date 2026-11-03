@@ -1,6 +1,6 @@
 /** Translate Messages events while preserving block order and cumulative usage. */
 
-import { LlmError, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { LlmError, ToolCallId, extractThinkingFromChunks } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { object, replayState } from './replay.ts'
 import type { ReplayBlock } from './replay.ts'
@@ -101,7 +101,7 @@ function stopReason(raw: unknown): FinishReason {
  * @param model - requested model id stored in durable replay state.
  * @returns blocks, one final usage value, and exactly one terminal finish.
  */
-export async function* translate(events: AsyncIterable<Record<string, unknown>>, model: string): AsyncGenerator<StreamChunk> {
+async function* rawTranslate(events: AsyncIterable<Record<string, unknown>>, model: string): AsyncGenerator<StreamChunk> {
   const blocks = new Map<number, Block>()
   const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 }
   let started = false
@@ -163,4 +163,8 @@ export async function* translate(events: AsyncIterable<Record<string, unknown>>,
     }
   }
   throw new LlmError('DeepSeek Messages stream ended before message_stop', 'STREAM_CLOSED')
+}
+
+export async function* translate(events: AsyncIterable<Record<string, unknown>>, model: string): AsyncGenerator<StreamChunk> {
+  yield* extractThinkingFromChunks(rawTranslate(events, model))
 }

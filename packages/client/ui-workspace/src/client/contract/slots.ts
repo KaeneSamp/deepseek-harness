@@ -324,6 +324,8 @@ export type SessionRowActionProps<Injected extends object = object> =
 export type RowToast =
   | { kind: 'archived'; sessionId: SessionId }
   | { kind: 'stoppedAndArchived'; sessionId: SessionId }
+  | { kind: 'trashed'; sessionId: SessionId }
+  | { kind: 'purged'; sessionId: SessionId }
   | { kind: 'sessionIdCopied' }
   | { kind: 'sessionIdCopyFailed' }
   | { kind: 'pinFailed' }
@@ -332,6 +334,8 @@ export type RowToast =
   | { kind: 'defaultWorkspaceFailed' }
   | { kind: 'forkRequiresOpen'; sessionId: SessionId }
   | { kind: 'shortcutForkFailed'; reason: 'unavailable' | 'failed' }
+  | { kind: 'trashFailed' }
+  | { kind: 'purgeFailed' }
   /**
    * An explicit New Session request that failed. `message` is untranslated:
    * a Host refusal as `code: message` — the stable code stays in the copy so
@@ -416,6 +420,70 @@ export interface SessionArchiveConfirmInjected {
   stopAndArchiveSession: (sessionId: SessionId) => Promise<void>
 }
 
+/**
+ * Trash action share (menu row and hover button). The callbacks carry the
+ * whole behavior: the Host call, the notice a success raises, the
+ * trash confirmation a Host refusal for running work raises, and
+ * the diagnostics for any other rejection.
+ */
+export interface TrashSessionInjected {
+  hooks: {
+    /** Trashed Session ids. */
+    trashed: HostObservable<ReadonlySet<SessionId>>
+    /** Archived Session ids (for checking if a session is archived before allowing trash). */
+    archived: HostObservable<ReadonlySet<SessionId>>
+  }
+  /**
+   * Move an archived Session to the registry-global trash set: the row keeps
+   * its account position and shows per the archived filter; trashing the
+   * current session clears the selection into the New Session view state.
+   */
+  trashSession: (sessionId: SessionId) => void
+  /** Restore a Session from the registry-global trash set back to archived. */
+  restoreFromTrash: (sessionId: SessionId) => void
+  /** Permanently delete a trashed Session and its on-disk files. */
+  purgeTrashedSession: (sessionId: SessionId) => void
+}
+
+/**
+ * A trash confirmation the trash action asked for: the Host
+ * refused the plain trash because this work still runs.
+ */
+export interface SessionTrashConfirmRequest {
+  /** Session to move to trash. */
+  sessionId: SessionId
+  /** The row's display title, named in the dialog. */
+  displayTitle: string
+  /** What the Host reported running, in family order. */
+  activity: readonly SessionActivity[]
+}
+
+/**
+ * Trash dialog share: the pending confirmation, its settlement,
+ * and the trash hop that asks the Host to move the session to trash.
+ */
+export interface SessionTrashConfirmInjected {
+  hooks: {
+    /** The trash confirmation asked for, until the dialog consumes or cancels it. */
+    trashRequest: HostObservable<SessionTrashConfirmRequest | null>
+    /** The purge confirmation asked for, until the dialog consumes or cancels it. */
+    purgeRequest: HostObservable<SessionTrashConfirmRequest | null>
+  }
+  /** Consume or cancel the pending trash confirmation. */
+  settleSessionTrash: () => void
+  /** Consume or cancel the pending purge confirmation. */
+  settleSessionPurge: () => void
+  /**
+   * Move a Session to trash; resolves once the trash set is durable
+   * and raises the trashed notice.
+   */
+  trashSession: (sessionId: SessionId) => Promise<void>
+  /**
+   * Permanently delete a trashed Session and its on-disk files.
+   */
+  purgeTrashedSession: (sessionId: SessionId) => Promise<void>
+}
+
 /** Fork action share. */
 export interface ForkSessionInjected {
   /** Fork a Session at its last completed turn; the child arrives through the Host list. */
@@ -487,6 +555,20 @@ export type SessionArchiveConfirmProps =
   & PropsLocale<'workspace'>
   & Omit<SessionArchiveConfirmInjected, 'hooks'>
   & PropsHooks<SessionArchiveConfirmInjected['hooks']>
+
+/** Props of the trash confirmation dialog entry in `shell.overlay`. */
+export type SessionTrashConfirmProps =
+  PropsRuntime<'shell.overlay'>
+  & PropsLocale<'workspace'>
+  & Omit<SessionTrashConfirmInjected, 'hooks'>
+  & PropsHooks<SessionTrashConfirmInjected['hooks']>
+
+/** Props of the purge confirmation dialog entry in `shell.overlay`. */
+export type SessionPurgeConfirmProps =
+  PropsRuntime<'shell.overlay'>
+  & PropsLocale<'workspace'>
+  & Omit<SessionTrashConfirmInjected, 'hooks'>
+  & PropsHooks<SessionTrashConfirmInjected['hooks']>
 
 /** Props of the existing overlay's keyed notice dispatcher. */
 export type RowToastProps =

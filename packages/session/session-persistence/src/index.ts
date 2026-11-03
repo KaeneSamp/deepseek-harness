@@ -79,6 +79,12 @@ export interface SessionPersistenceCreateOptions {
   readonly inheritedEventCount?: SessionLogOffset
 }
 
+/** Options for {@link SessionPersistence.delete}. */
+export interface SessionPersistenceDeleteOptions {
+  /** Optional cancellation observed before backend work starts. */
+  readonly signal?: AbortSignal
+}
+
 /**
  * Logical Session header paired with its exact inherited cut for body-bearing
  * storage operations. `isSeeded` marks fork lineage on the header; the
@@ -208,6 +214,15 @@ export abstract class SessionPersistence extends Service {
    * @returns one snapshot per stored session.
    */
   abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>
+
+  /**
+   * Permanently delete a stored session and all its artifacts.
+   * This removes the session directory and all generation files.
+   * @param id - the stored session to delete.
+   * @param options - optional cancellation.
+   * @throws {SessionPersistenceNotFoundError} when the session does not exist.
+   */
+  abstract delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<void>
 }
 
 export default SessionPersistence
