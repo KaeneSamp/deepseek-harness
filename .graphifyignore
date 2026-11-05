@@ -1,0 +1,10 @@
+# graphify ignore patterns for deepseek-harness
+snapshots/
+.agents/notes/archived/
+**/tests/fixtures/**
+.dsh-build/
+.dsh-report/
+.artifacts/
+coverage/
+dist/
+dist-exe/
