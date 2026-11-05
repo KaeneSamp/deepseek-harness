@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import Storage from '@deepseek-ai/dsh-storage'
@@ -51,7 +51,12 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve }
 }
 
-async function harness(options: { systemDocuments?: boolean } = {}) {
+async function harness(options: {
+  systemDocuments?: boolean
+  sessionPersistence?: unknown
+  schedule?: unknown
+  beforeController?: (ctx: Context) => void
+} = {}) {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-workspace-controller-')))
   tempDirs.push(root)
   const ctx = new Context()
@@ -62,7 +67,8 @@ async function harness(options: { systemDocuments?: boolean } = {}) {
   const storageDomain = new DomainFacility(ctx, { backend: 'memory', routes: {} })
   ctx.storage.mount('domain', storageDomain)
   ctx.provide('storageDomain', storageDomain)
-  ctx.provide('sessionPersistence', { list: () => Promise.resolve([]) } as never)
+  ctx.provide('sessionPersistence', (options.sessionPersistence ?? { list: () => Promise.resolve([]) }) as never)
+  if (options.schedule !== undefined) ctx.provide('schedule', options.schedule as never)
   await ctx.plugin(WorkspaceRegistry)
   const dispose = (): void => {}
   ctx.provide('typert', {
@@ -71,6 +77,7 @@ async function harness(options: { systemDocuments?: boolean } = {}) {
     resources: { register: vi.fn(() => dispose) },
   } as never)
   new RemoteAccessService(ctx)
+  options.beforeController?.(ctx)
   const controller = new WorkspaceController(ctx, options.systemDocuments === true ? {} : { documentsDirectory: root })
   return { controller, ctx, root, storageDomain }
 }
@@ -381,7 +388,7 @@ describe('WorkspaceController follow', () => {
     const iterator = controller.follow(abort.signal)[Symbol.asyncIterator]()
     await expect(nextFrame(iterator)).resolves.toEqual({
       type: 'baseline',
-      value: { items: [], archivedSessionIds: [], pinnedSessionIds: [] },
+      value: { items: [], archivedSessionIds: [], pinnedSessionIds: [], trashedSessionIds: [] },
     })
 
     const first = await controller.create({ path: stageDir(root, 'first') })
@@ -477,6 +484,7 @@ describe('WorkspaceController follow', () => {
         items: [expect.objectContaining({ workspaceId: shownId, sessionIds: [shared.id] })],
         archivedSessionIds: [],
         pinnedSessionIds: [shared.id],
+        trashedSessionIds: [],
       },
     })
 
@@ -609,5 +617,106 @@ describe('first-use Remote', () => {
     vi.spyOn(ctx.workspaceRegistry, 'initializeDefault').mockRejectedValueOnce(new Error('permission denied'))
     await expect(controller.initializeDefault(new AbortController().signal))
       .rejects.toThrow('permission denied')
+  })
+})
+
+describe('trash purge wiring', () => {
+  type PurgeCallback = (cutoffDate: Date) => Promise<{ purgedCount: number; purgedSessionIds: readonly string[] }>
+
+  function fakePersistence() {
+    return {
+      list: () => Promise.resolve([]),
+      delete: vi.fn(async () => {}),
+    }
+  }
+
+  /** Create one Workspace, attach one Session, archive it, and trash it through the remotes. */
+  async function trashOne(controller: WorkspaceController, ctx: Context, root: string, id: string): Promise<SessionId> {
+    const created = await controller.create({ path: stageDir(root, id) })
+    const session = ctx.sessions.create(SessionId(id), { meta: { cwd: created.workspace.path } })
+    const workspace = ctx.workspaceRegistry.get(created.workspace.workspaceId)
+    if (workspace === undefined) throw new Error('fixture Workspace disappeared')
+    await workspace.attachSession(session.id)
+    await controller.archiveSession({ sessionId: session.id })
+    await controller.trashSession({ sessionId: session.id })
+    return session.id
+  }
+
+  it('warns and constructs when the schedule service is absent', async () => {
+    let warn: MockInstance | undefined
+    await harness({
+      beforeController: (ctx) => { warn = vi.spyOn(ctx.logger, 'warn') },
+    })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('schedule service unavailable'))
+  })
+
+  it('registers one purge callback with the schedule service and disposes it on shutdown', async () => {
+    const disposer = vi.fn()
+    const register = vi.fn((_callback: PurgeCallback) => disposer)
+    const { ctx } = await harness({ schedule: { registerTrashPurgeCallback: register } })
+    expect(register).toHaveBeenCalledTimes(1)
+    await ctx.fiber.dispose()
+    expect(disposer).toHaveBeenCalledTimes(1)
+  })
+
+  it('purges only trash older than the cutoff through the registered callback', async () => {
+    const persistence = fakePersistence()
+    let callback: PurgeCallback | undefined
+    const { controller, ctx, root } = await harness({
+      sessionPersistence: persistence,
+      schedule: { registerTrashPurgeCallback: (cb: PurgeCallback) => { callback = cb; return () => {} } },
+    })
+    const older = await trashOne(controller, ctx, root, 'older')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const newer = await trashOne(controller, ctx, root, 'newer')
+    if (callback === undefined) throw new Error('fixture purge callback was not registered')
+
+    const stamps = [...ctx.workspaceRegistry.trashedAt.values()]
+      .map(value => new Date(value).getTime())
+      .sort((a, b) => a - b)
+    const cutoff = new Date((stamps[0]! + stamps[1]!) / 2)
+    const result = await callback(cutoff)
+    expect(result).toEqual({ purgedCount: 1, purgedSessionIds: [older] })
+    expect(persistence.delete).toHaveBeenCalledTimes(1)
+    expect(persistence.delete).toHaveBeenCalledWith(older)
+    expect(ctx.workspaceRegistry.trashedSessionIds).toEqual([newer])
+    // A purged session is dropped, never returned to the archive set.
+    expect(ctx.workspaceRegistry.archivedSessionIds).toEqual([])
+
+    const none = await callback(new Date(0))
+    expect(none).toEqual({ purgedCount: 0, purgedSessionIds: [] })
+    expect(ctx.workspaceRegistry.trashedSessionIds).toEqual([newer])
+    expect(persistence.delete).toHaveBeenCalledTimes(1)
+  })
+
+  it('purges one trashed session permanently without re-archiving and reports a miss', async () => {
+    const persistence = fakePersistence()
+    const { controller, ctx, root } = await harness({ sessionPersistence: persistence })
+    const doomed = await trashOne(controller, ctx, root, 'doomed')
+
+    await expect(controller.purgeTrashedSession({ sessionId: doomed })).resolves.toEqual({ purged: true })
+    expect(persistence.delete).toHaveBeenCalledWith(doomed)
+    expect(ctx.workspaceRegistry.trashedSessionIds).toEqual([])
+    expect(ctx.workspaceRegistry.archivedSessionIds).not.toContain(doomed)
+
+    await expect(controller.purgeTrashedSession({ sessionId: doomed })).resolves.toEqual({ purged: false })
+    expect(persistence.delete).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the purge when persisted data cannot be deleted and warns', async () => {
+    const persistence = fakePersistence()
+    persistence.delete.mockRejectedValueOnce(new Error('disk full'))
+    let warn: MockInstance | undefined
+    const { controller, ctx, root } = await harness({
+      sessionPersistence: persistence,
+      beforeController: (context) => { warn = vi.spyOn(context.logger, 'warn') },
+    })
+    const doomed = await trashOne(controller, ctx, root, 'doomed')
+
+    await expect(controller.purgeTrashedSession({ sessionId: doomed })).resolves.toEqual({ purged: true })
+    expect(persistence.delete).toHaveBeenCalledWith(doomed)
+    expect(ctx.workspaceRegistry.trashedSessionIds).toEqual([])
+    expect(ctx.workspaceRegistry.archivedSessionIds).not.toContain(doomed)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not be deleted'))
   })
 })

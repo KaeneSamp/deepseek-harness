@@ -53,18 +53,18 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Host Workspace business API and Remote namespace owner. */
     workspaceController: WorkspaceController
-    /** Schedule service for auto-purge job. */
+    /** Schedule service for auto-purge job; optional, read through `ctx.get`. */
     schedule: {
       registerTrashPurgeCallback: (
         callback: (cutoffDate: Date) => Promise<{ purgedCount: number; purgedSessionIds: readonly string[] }>,
-      ) => void
+      ) => () => void
     }
   }
 }
 
 /** Host service backing the generated `ctx.remote.workspace` namespace. */
 export class WorkspaceController extends TypertRemoteService {
-  static inject = ['remoteAccess', 'typert', 'workspaceRegistry', 'sessionPersistence', 'schedule']
+  static inject = ['remoteAccess', 'typert', 'workspaceRegistry', 'sessionPersistence']
 
   static Config: z<Config, ResolvedConfig> = z.object({
     documentsDirectory: z.string(),
@@ -86,10 +86,18 @@ export class WorkspaceController extends TypertRemoteService {
     if (this.config.documentsDirectory !== undefined) validateDocumentsDirectory(this.config.documentsDirectory)
     this.commands = new WorkspaceCommands(ctx, ctx.sessionPersistence)
     this.feed = new WorkspaceFeed(ctx)
-    // Register auto-purge callback with ScheduleService
-    ctx.schedule.registerTrashPurgeCallback(async (cutoffDate: Date) => {
-      return await this.commands.purgeExpiredTrash(cutoffDate)
-    })
+    // Auto-purge is an optional composition: the schedule service owns the
+    // daily timer, and a host without it keeps manual purge only.
+    ctx.effect(() => {
+      const schedule = ctx.get('schedule')
+      if (schedule === undefined) {
+        ctx.logger.warn('workspaceController: schedule service unavailable; automatic trash purge is disabled')
+        return () => {}
+      }
+      return schedule.registerTrashPurgeCallback(async (cutoffDate: Date) => {
+        return await this.commands.purgeExpiredTrash(cutoffDate)
+      })
+    }, 'workspaceController.registerTrashPurgeCallback()')
     // This package is the Loader entry for both Remote owners it hosts: the
     // directory-picking seam is abstract and never an entry itself. The child
     // stays pending until a picking backend is composed, so a host without one

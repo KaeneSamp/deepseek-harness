@@ -167,7 +167,7 @@ it.each([true, false])('reads earlier history with receipt=%s without rewriting 
   test.ctx.on('schedule/changed', changed)
   expect(await test.service.history({ id: taskId, limit: 100 })).toEqual({
     id: taskId, records: hasReceipt ? [{ ...repairedTask.lastDelivery, targetSessionId: 'original' }] : [], earlierRecordsUnavailable: true,
-    earlierRecordsPruned: false, retention: { days: 30, records: 200 },
+    earlierRecordsPruned: false, retention: { days: 30, records: 200, trashRetentionDays: 30 },
   })
   // Only a delivered one-shot rule ends; an inactive rule without a delivery pauses.
   expect(taskTable(test.ctx).get(taskId)?.status).toBe('ended')

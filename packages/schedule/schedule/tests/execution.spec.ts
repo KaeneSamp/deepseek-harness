@@ -15,7 +15,7 @@ import { MIN_DELIVERY_INTERVAL_MS, ScheduleRuntime } from '../src/runtime.ts'
 import type { ScheduleTask } from '../src/storage.ts'
 import { seededTask } from './harness.ts'
 
-const LIMITS = { retention: { days: 30, records: 200 }, newSessionIntervalMs: 3_600_000 }
+const LIMITS = { retention: { days: 30, records: 200 }, newSessionIntervalMs: 3_600_000, trashRetentionDays: 30 }
 
 class HangingAdapter extends LlmAdapter {
   readonly requests: GenerateOptions[] = []

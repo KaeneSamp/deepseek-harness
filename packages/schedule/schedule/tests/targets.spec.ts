@@ -16,7 +16,7 @@ import { ScheduleRuntime, type ScheduleRuntimeLimits } from '../src/runtime.ts'
 import type { ScheduleTask } from '../src/storage.ts'
 import { agentFor, harness, seededTask, type HarnessAgent } from './harness.ts'
 
-const LIMITS: ScheduleRuntimeLimits = { retention: { days: 30, records: 200 }, newSessionIntervalMs: 3_600_000 }
+const LIMITS: ScheduleRuntimeLimits = { retention: { days: 30, records: 200 }, newSessionIntervalMs: 3_600_000, trashRetentionDays: 30 }
 const active: Awaited<ReturnType<typeof harness>>[] = []
 const runtimes: ScheduleRuntime[] = []
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime('2026-09-16T00:00:00Z') })

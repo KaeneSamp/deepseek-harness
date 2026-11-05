@@ -15,7 +15,7 @@ import { agentFor, boundTask, harness } from './harness.ts'
 const tests: Awaited<ReturnType<typeof harness>>[] = []
 const runtimes: ScheduleRuntime[] = []
 const ORIGINAL = SessionId('original')
-const LIMITS = { retention: { days: 30, records: 200 }, newSessionIntervalMs: 3_600_000 }
+const LIMITS = { retention: { days: 30, records: 200 }, newSessionIntervalMs: 3_600_000, trashRetentionDays: 30 }
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-09-16T00:00:00Z')) })
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map(runtime => runtime.dispose()))

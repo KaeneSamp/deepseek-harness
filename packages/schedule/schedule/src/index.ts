@@ -302,6 +302,7 @@ export class ScheduleService extends TypertRemoteService {
       try {
         cleanup = ctx.effect(() => async () => {
           this.stopping = true
+          this.stopTrashPurgeTimer()
           await this.runtime?.dispose()
           await this.chain // The chain contains failures after returning them to their callers.
           await this.notifications // Each notice contains its own delivery failure.
@@ -309,6 +310,7 @@ export class ScheduleService extends TypertRemoteService {
         })
       } catch (error) {
         this.stopping = true
+        this.stopTrashPurgeTimer()
         await domain.close()
         throw error
       }
@@ -365,19 +367,26 @@ export class ScheduleService extends TypertRemoteService {
    * Called by the WorkspaceController during initialization.
    * @param callback - Function that purges expired trash sessions given a cutoff date.
    *   Should return the count and ids of purged sessions.
+   * @returns Disposer that unregisters the callback and stops the timer.
    */
   registerTrashPurgeCallback(
     callback: (cutoffDate: Date) => Promise<{ purgedCount: number; purgedSessionIds: readonly string[] }>,
-  ): void {
+  ): () => void {
     this.trashPurgeCallback = callback
-    // If the timer was already started, restart it with the new callback
+    // The timer reads the callback at fire time, so an already running timer
+    // picks the new callback up without a restart.
     this.maybeStartTrashPurgeTimer()
+    return () => {
+      this.trashPurgeCallback = undefined
+      this.stopTrashPurgeTimer()
+    }
   }
 
   /**
    * Start the daily auto-purge timer if enabled and callback is registered.
    */
   private maybeStartTrashPurgeTimer(): void {
+    if (this.stopping) return
     if (this.trashPurgeTimer !== undefined) return
     if (this.limits.trashRetentionDays === 0) return
     if (this.trashPurgeCallback === undefined) return
@@ -395,6 +404,7 @@ export class ScheduleService extends TypertRemoteService {
         this.trashPurgeTimer = undefined
         try {
           const cutoffDate = new Date(Date.now() - this.limits.trashRetentionDays * 24 * 60 * 60 * 1000)
+          /* v8 ignore else -- an armed timer implies a registered callback; the disposer clears both together. */
           if (this.trashPurgeCallback !== undefined) {
             const result = await this.trashPurgeCallback(cutoffDate)
             if (result.purgedCount > 0) {
@@ -404,10 +414,19 @@ export class ScheduleService extends TypertRemoteService {
         } catch (error) {
           this.ctx.logger.error(`schedule: auto-purge failed: ${String(error)}`)
         }
-        scheduleNext()
+        if (!this.stopping) scheduleNext()
       }, msUntilNext)
+      // The daily purge must never keep the host process alive on its own.
+      this.trashPurgeTimer.unref()
     }
     scheduleNext()
+  }
+
+  /** Clear a pending auto-purge timer; the firing callback re-checks `stopping`. */
+  private stopTrashPurgeTimer(): void {
+    if (this.trashPurgeTimer === undefined) return
+    clearTimeout(this.trashPurgeTimer)
+    this.trashPurgeTimer = undefined
   }
 
   private trashPurgeTimer: ReturnType<typeof setTimeout> | undefined

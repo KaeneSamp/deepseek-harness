@@ -545,6 +545,29 @@ export class WorkspaceRegistry extends Service {
   }
 
   /**
+   * Drop one session from the registry-global trash set without returning it
+   * to the archived set. Purge flows call this before deleting persisted data,
+   * so an interrupted purge leaves orphaned persisted data at worst, never a
+   * trashed id pointing at deleted data. An id that is not trashed resolves
+   * without writing.
+   * @param sessionId - The trashed session to remove.
+   * @returns resolution after durability.
+   */
+  removeTrashedSession(sessionId: SessionId): Promise<void> {
+    return this.enqueueOperation(async () => {
+      const state = this.requireState()
+      if (!state.trashedSessionIds.includes(sessionId)) return
+      const newTrashedAt = new Map(Object.entries(state.trashedAt)) as Map<SessionId, string>
+      newTrashedAt.delete(sessionId)
+      await this.setState({
+        ...state,
+        trashedSessionIds: state.trashedSessionIds.filter(id => id !== sessionId),
+        trashedAt: Object.fromEntries(newTrashedAt),
+      })
+    })
+  }
+
+  /**
    * Whether a session is live, header-indexed, or present in a fresh
    * persistence listing. Only a definite miss returns false — a failing
    * `sessionPersistence.list()` propagates so storage faults never

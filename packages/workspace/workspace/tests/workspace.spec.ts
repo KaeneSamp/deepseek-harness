@@ -1382,6 +1382,141 @@ describe('registry-global session unpin', () => {
   })
 })
 
+describe('registry-global session trash', () => {
+  it('trashes archived sessions durably in prepend order with a timestamp, idempotently', async () => {
+    const dir = await makeDir('trash-home')
+    const result = await harness({ sessions: [header('one', dir, 100), header('two', dir, 200)] })
+    await result.registry.archiveSession(SessionId('one'))
+    await result.registry.archiveSession(SessionId('two'))
+    expect(result.registry.archivedSessionIds).toEqual(['one', 'two'])
+
+    await result.registry.trashSession(SessionId('one'))
+    expect(result.registry.trashedSessionIds).toEqual(['one'])
+    expect(result.registry.archivedSessionIds).toEqual(['two'])
+    const stamped = result.registry.trashedAt.get(SessionId('one'))
+    expect(stamped).toBeDefined()
+    expect(storedState(result.pool).trashedSessionIds).toEqual(['one'])
+    expect(storedState(result.pool).trashedAt).toEqual({ one: stamped })
+    expect(storedState(result.pool).archivedSessionIds).toEqual(['two'])
+    const changesAfterFirst = result.changes.filter(change => change.table === '').length
+
+    // The idempotent repeat neither rewrites the medium nor emits a change.
+    await result.registry.trashSession(SessionId('one'))
+    expect(result.registry.trashedSessionIds).toEqual(['one'])
+    expect(result.changes.filter(change => change.table === '').length).toBe(changesAfterFirst)
+
+    // Trash prepends: the most recently trashed id leads the set.
+    await result.registry.trashSession(SessionId('two'))
+    expect(result.registry.trashedSessionIds).toEqual(['two', 'one'])
+    expect(result.registry.archivedSessionIds).toEqual([])
+    expect(storedState(result.pool).trashedSessionIds).toEqual(['two', 'one'])
+  })
+
+  it('refuses to trash a session that is not archived and writes nothing', async () => {
+    const dir = await makeDir('trash-not-archived')
+    const result = await harness({ sessions: [header('stored', dir, 100)] })
+    await expect(result.registry.trashSession(SessionId('stored')))
+      .rejects.toThrow(/cannot trash session 'stored': the session is not archived/)
+    expect(result.registry.trashedSessionIds).toEqual([])
+    expect(storedState(result.pool).trashedSessionIds).toEqual([])
+  })
+
+  it('rejects an archived id that a restarted registry with an empty listing can no longer see', async () => {
+    const dir = await makeDir('trash-unknown')
+    const pool = new MemoryMediaPool()
+    const first = await harness({ pool, sessions: [header('gone', dir, 100)] })
+    await first.registry.archiveSession(SessionId('gone'))
+    await first.fiber.dispose()
+
+    // The fresh registry has an empty header index, so the archived id is a
+    // definite miss only after the persistence listing comes back empty.
+    const second = await harness({ pool, sessions: [] })
+    await expect(second.registry.trashSession(SessionId('gone')))
+      .rejects.toThrow(/cannot trash session 'gone': live sessions and session persistence hold no such session/)
+    expect(second.registry.trashedSessionIds).toEqual([])
+    expect(storedState(pool).trashedSessionIds).toEqual([])
+  })
+
+  it('propagates a persistence-listing failure instead of reporting an unknown session', async () => {
+    const dir = await makeDir('trash-list-failure')
+    const pool = new MemoryMediaPool()
+    const first = await harness({ pool, sessions: [header('archived', dir, 100)] })
+    await first.registry.archiveSession(SessionId('archived'))
+    await first.fiber.dispose()
+
+    const second = await harness({ pool, sessions: [] })
+    second.list.mockRejectedValueOnce(new Error('persistence backend down'))
+    await expect(second.registry.trashSession(SessionId('archived')))
+      .rejects.toThrow(/persistence backend down/)
+    expect(second.registry.trashedSessionIds).toEqual([])
+  })
+
+  it('restores a trashed session back to the archive set and clears its timestamp, idempotently', async () => {
+    const dir = await makeDir('trash-restore')
+    const result = await harness({ sessions: [header('one', dir, 100)] })
+    await result.registry.archiveSession(SessionId('one'))
+    await result.registry.trashSession(SessionId('one'))
+    expect(result.registry.trashedSessionIds).toEqual(['one'])
+
+    await result.registry.restoreFromTrash(SessionId('one'))
+    expect(result.registry.trashedSessionIds).toEqual([])
+    expect(result.registry.trashedAt.get(SessionId('one'))).toBeUndefined()
+    expect(result.registry.archivedSessionIds).toEqual(['one'])
+    expect(storedState(result.pool).trashedSessionIds).toEqual([])
+    expect(storedState(result.pool).trashedAt).toEqual({})
+    expect(storedState(result.pool).archivedSessionIds).toEqual(['one'])
+    const changesAfterFirst = result.changes.filter(change => change.table === '').length
+
+    // A non-trashed id resolves without writing.
+    await result.registry.restoreFromTrash(SessionId('one'))
+    expect(result.registry.archivedSessionIds).toEqual(['one'])
+    expect(result.changes.filter(change => change.table === '').length).toBe(changesAfterFirst)
+  })
+
+  it('removes a trashed session without returning it to the archive set, idempotently', async () => {
+    const dir = await makeDir('trash-remove')
+    const result = await harness({ sessions: [header('one', dir, 100), header('kept', dir, 200)] })
+    await result.registry.archiveSession(SessionId('one'))
+    await result.registry.archiveSession(SessionId('kept'))
+    await result.registry.trashSession(SessionId('one'))
+    expect(result.registry.trashedSessionIds).toEqual(['one'])
+    expect(result.registry.archivedSessionIds).toEqual(['kept'])
+
+    // Purge removal drops the trash entry and timestamp but never re-archives.
+    await result.registry.removeTrashedSession(SessionId('one'))
+    expect(result.registry.trashedSessionIds).toEqual([])
+    expect(result.registry.trashedAt.get(SessionId('one'))).toBeUndefined()
+    expect(result.registry.archivedSessionIds).toEqual(['kept'])
+    expect(storedState(result.pool).trashedSessionIds).toEqual([])
+    expect(storedState(result.pool).trashedAt).toEqual({})
+    expect(storedState(result.pool).archivedSessionIds).toEqual(['kept'])
+    const changesAfterFirst = result.changes.filter(change => change.table === '').length
+
+    // Repeats and ghost ids all resolve without writing.
+    await result.registry.removeTrashedSession(SessionId('one'))
+    await result.registry.removeTrashedSession(SessionId('ghost'))
+    expect(result.registry.trashedSessionIds).toEqual([])
+    expect(result.changes.filter(change => change.table === '').length).toBe(changesAfterFirst)
+  })
+
+  it('keeps the trash set and timestamps across restarts', async () => {
+    const dir = await makeDir('trash-restart')
+    const pool = new MemoryMediaPool()
+    const sessions = [header('s1', dir, 100), header('s2', dir, 200)]
+    const first = await harness({ pool, sessions })
+    await first.registry.archiveSession(SessionId('s1'))
+    await first.registry.archiveSession(SessionId('s2'))
+    await first.registry.trashSession(SessionId('s1'))
+    const stamped = first.registry.trashedAt.get(SessionId('s1'))
+    await first.fiber.dispose()
+
+    const second = await harness({ pool, sessions })
+    expect(second.registry.trashedSessionIds).toEqual(['s1'])
+    expect(second.registry.trashedAt.get(SessionId('s1'))).toBe(stamped)
+    expect(second.registry.archivedSessionIds).toEqual(['s2'])
+  })
+})
+
 describe('first-use Workspace preparation', () => {
   const contexts: Context[] = []
 

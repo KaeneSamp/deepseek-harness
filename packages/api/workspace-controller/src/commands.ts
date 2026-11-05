@@ -256,15 +256,7 @@ export class WorkspaceCommands {
     if (!state.trashedSessionIds.includes(sessionId)) {
       return { purged: false }
     }
-    // First remove from trash
-    await this.ctx.workspaceRegistry.restoreFromTrash(sessionId)
-    // Then delete the session's persisted data
-    try {
-      await this.sessionPersistence.delete(sessionId)
-    } catch (_error) {
-      // If session doesn't exist in persistence, that's fine - it's already gone
-      // We still return purged: true since the workspace registry is clean
-    }
+    await this.purgeOne(sessionId)
     return { purged: true }
   }
 
@@ -294,18 +286,30 @@ export class WorkspaceCommands {
 
       // Purge each expired session
       for (const sessionId of expiredSessionIds) {
-        // Remove from trash
-        await this.ctx.workspaceRegistry.restoreFromTrash(sessionId)
-        // Delete persisted data
-        try {
-          await this.sessionPersistence.delete(sessionId)
-        } catch (_error) {
-          // If session doesn't exist in persistence, that's fine - it's already gone
-        }
+        await this.purgeOne(sessionId)
       }
 
       return { purgedCount: expiredSessionIds.length, purgedSessionIds: expiredSessionIds }
     })
+  }
+
+  /**
+   * Purge one trashed session: drop it from the trash set without returning
+   * it to the archive, then delete its persisted data. The registry write
+   * runs first so an interrupted purge never leaves a trashed id pointing at
+   * deleted data. A persistence failure leaves the session purged from the
+   * trash set and is reported in the log instead of being hidden.
+   * @param sessionId - Session identity to purge.
+   */
+  private async purgeOne(sessionId: SessionId): Promise<void> {
+    await this.ctx.workspaceRegistry.removeTrashedSession(sessionId)
+    try {
+      await this.sessionPersistence.delete(sessionId)
+    } catch (error) {
+      this.ctx.logger.warn(
+        `workspace: purge removed session '${sessionId}' from trash but its persisted data could not be deleted: ${errorMessage(error)}`,
+      )
+    }
   }
 
   /**

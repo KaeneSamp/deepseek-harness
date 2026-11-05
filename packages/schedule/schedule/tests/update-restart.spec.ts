@@ -75,7 +75,7 @@ it.each([true, false])('persists same-ID daily edits of a version-1 task with sa
   expect(await second.service.catalog()).toMatchObject([{ ...updated, target: { kind: 'session', sessionId }, status: 'active', lastDelivery: receipt }])
   expect(await second.service.history({ id, limit: 100 })).toEqual({
     id, records: withHistory ? [{ ...receipt, prompt: record.prompt }] : [receipt],
-    earlierRecordsUnavailable: !withHistory, earlierRecordsPruned: false, retention: { days: 30, records: 200 },
+    earlierRecordsUnavailable: !withHistory, earlierRecordsPruned: false, retention: { days: 30, records: 200, trashRetentionDays: 30 },
   })
   const changed = vi.fn()
   second.ctx.on('schedule/changed', changed)

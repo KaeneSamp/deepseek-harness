@@ -22,7 +22,7 @@ async function setup(options: Parameters<typeof harness>[0] = {}) {
 const sessionId = SessionId('history-owner')
 const id = ScheduleId('history-task')
 const rule = createAfterScheduleRecord(id, 'Current task prompt', 1, Date.parse('2026-09-16T00:00:00.000Z'), 'Current task prompt')
-const metadata = { earlierRecordsPruned: false, retention: { days: 30, records: 200 } }
+const metadata = { earlierRecordsPruned: false, retention: { days: 30, records: 200, trashRetentionDays: 30 } }
 function receipt(index: number): ScheduleDeliveryRecord {
   return {
     messageId: MessageId(`message-${index}`), prompt: `Sent prompt ${index}`, targetSessionId: sessionId,
@@ -275,11 +275,11 @@ it('publishes confirmed pruning and the configured policy across restart', async
   const record = await first.service.create({ prompt: 'Retained history', title: 'Retained history', timing: { kind: 'every', every_seconds: 300 }, target: { kind: 'session', sessionId: sessionId } }, sessionId)
   await vi.advanceTimersByTimeAsync(600_000)
   expect(await first.service.history({ id: record.id, limit: 20 })).toMatchObject({
-    earlierRecordsPruned: false, retention: { days: 7, records: 2 },
+    earlierRecordsPruned: false, retention: { days: 7, records: 2, trashRetentionDays: 30 },
   })
   await vi.advanceTimersByTimeAsync(300_000)
   const page = await first.service.history({ id: record.id, limit: 20 })
-  expect(page).toMatchObject({ earlierRecordsPruned: true, retention: { days: 7, records: 2 } })
+  expect(page).toMatchObject({ earlierRecordsPruned: true, retention: { days: 7, records: 2, trashRetentionDays: 30 } })
   if ('code' in page) throw new Error('Expected retained records')
   expect(page.records).toHaveLength(2)
   await first.ctx.fiber.dispose()
